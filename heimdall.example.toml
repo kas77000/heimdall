@@ -1,0 +1,21 @@
+# Copy to heimdall.toml. Every value can also be set with an environment
+# variable (HEIMDALL_DB, HEIMDALL_PORT, HEIMDALL_URL, ...). Secrets never go
+# here: name the environment variable that holds them instead.
+
+[muninn]
+path = "data/heimdall.db"
+
+[huginn]
+host = "127.0.0.1"          # 0.0.0.0 to serve other machines (then set a token)
+port = 8765
+token_env = "HEIMDALL_TOKEN" # the API token is read from this variable; empty = no token
+workers = 4                  # alerts evaluated at the same time
+snapshot_rows = 200          # rows of the judged table kept with each run
+
+[sleipnir]
+url = "http://127.0.0.1:8765"
+tick_secs = 15
+run_grace_secs = 300         # a scheduled run later than this is skipped
+
+[bifrost]
+url = "http://localhost:8501" # used for links in notifications

@@ -10,3 +10,5 @@ dist/
 *.sqlite3
 .env
 .streamlit/secrets.toml
+data/
+heimdall.toml
