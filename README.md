@@ -15,7 +15,10 @@ whether or not anyone has a browser open. Dashboards stay in KdbMonitor.
 In the myth, Heimdall keeps watch over Bifrost, Huginn ("thought") and
 Muninn ("memory") are the ravens that fly out each day and report back, and
 Sleipnir is Odin's eight-legged horse. The design is in
-[docs/design.md](docs/design.md).
+[docs/design.md](docs/design.md), the setup guide in [docs/SETUP.md](docs/SETUP.md),
+and a short presentation in [docs/presentation/Heimdall.pptx](docs/presentation/Heimdall.pptx).
+
+![Bifrost's overview](docs/images/overview.png)
 
 ## Run it
 
