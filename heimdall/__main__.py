@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+from heimdall.proc import popen_group_kwargs, stop_tree
+
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "heimdall" / "bifrost" / "app.py"
 
@@ -48,7 +50,8 @@ def run_all(args: list[str]) -> None:
 
     def start(name, cmd):
         log = open(logs / f"{name}.log", "a", encoding="utf-8")
-        procs.append((name, subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)))
+        procs.append((name, subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                             **popen_group_kwargs())))
         print(f"  {name:<9} started, log: {logs / (name + '.log')}")
 
     print("Heimdall")
@@ -69,13 +72,7 @@ def run_all(args: list[str]) -> None:
         pass
     finally:
         for _, p in procs:
-            if p.poll() is None:
-                p.terminate()
-        for _, p in procs:
-            try:
-                p.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                p.kill()
+            stop_tree(p)
 
 
 def main() -> None:

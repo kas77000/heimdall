@@ -29,6 +29,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from heimdall.proc import popen_group_kwargs, stop_tree
+
 pytestmark = pytest.mark.e2e
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -136,16 +138,13 @@ class Stack:
     def start(self, name: str, args: list[str], cwd: Path = ROOT) -> None:
         log = open(self.tmp / f"{name}.log", "w", encoding="utf-8")
         self.procs[name] = subprocess.Popen([sys.executable, *args], cwd=cwd, env=self.env,
-                                            stdout=log, stderr=subprocess.STDOUT)
+                                            stdout=log, stderr=subprocess.STDOUT,
+                                            **popen_group_kwargs())
 
     def stop(self, name: str) -> None:
         p = self.procs.pop(name, None)
-        if p and p.poll() is None:
-            p.terminate()
-            try:
-                p.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        if p:
+            stop_tree(p)
 
     def log(self, name: str) -> str:
         path = self.tmp / f"{name}.log"
@@ -387,3 +386,14 @@ def test_10_bifrost_serves_and_its_pages_render_against_huginn(stack, monkeypatc
     next(b for b in at.button if b.label == "Test run").click().run()
     assert not at.exception
     assert any("Test run" in m.value for m in at.markdown)
+
+
+def test_11_stopping_a_part_stops_everything_it_started(stack):
+    """`heimdall bifrost` runs Streamlit as a child: stopping it must free the port."""
+    port = stack.ports["bifrost"]
+    stack.stop("bifrost")
+
+    def port_free():
+        with socket.socket() as s:
+            return s.connect_ex(("127.0.0.1", port)) != 0
+    assert wait_until(port_free, 15, "Bifrost's port to be released")
