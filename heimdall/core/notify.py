@@ -50,7 +50,7 @@ class Delivery:
 
 def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "") -> Message:
     label = {"trigger": "TRIGGERED", "error": "ERROR", "recovery": "RECOVERED"}[kind]
-    subject = (alert.channels.subject.strip() or f"[Heimdall] {alert.name}") + f" — {label}"
+    subject = (alert.channels.subject.strip() or f"[Heimdall] {alert.name}") + f": {label}"
     lines = [f"{alert.name}: {label}"]
     if alert.description:
         lines.append(alert.description)

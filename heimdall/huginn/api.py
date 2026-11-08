@@ -103,7 +103,8 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         return {"engine": {"running": engine.running, "paused": engine.paused,
                            "started_at": engine.started_at.isoformat(timespec="seconds") if engine.started_at else None,
                            "last_tick": engine.last_tick.isoformat(timespec="seconds") if engine.last_tick else None,
-                           "workers": cfg.workers},
+                           "workers": cfg.workers,
+                           "sleipnir_seen": engine.sleipnir_seen.isoformat(timespec="seconds") if engine.sleipnir_seen else None},
                 "now": now.isoformat(timespec="seconds"),
                 "today": store.stats(now.replace(hour=0, minute=0, second=0, microsecond=0)),
                 "alerts": alerts}
@@ -300,7 +301,9 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
             raise HTTPException(422, {"problems": [str(exc)]})
 
     @app.get("/schedules", dependencies=secured)
-    def get_schedules(alert_id: Optional[int] = None):
+    def get_schedules(alert_id: Optional[int] = None, who: str = Depends(actor)):
+        if who == "sleipnir":
+            engine.sleipnir_seen = utcnow()   # Sleipnir polls here: that is its heartbeat
         return [_schedule_out(s) for s in store.schedules(alert_id)]
 
     @app.post("/schedules", dependencies=secured)
@@ -336,7 +339,7 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         if body.outcome != "unchanged":
             store.log_event(who, f"schedule {body.outcome}", alert_id=s.alert_id,
                             alert_name=_name_or_blank(s.alert_id),
-                            detail=f"{s.action} — {body.detail}".strip(" —"))
+                            detail=f"{s.action}: {body.detail}".strip(": "))
         return {"ok": True}
 
     def _name_or_blank(alert_id: int) -> str:

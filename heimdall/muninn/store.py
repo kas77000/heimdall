@@ -303,7 +303,7 @@ class Muninn:
                 prev = dict(prev) if prev else {}
                 errors = prev.get("consecutive_errors", 0) + 1 if status == "error" else 0
                 notified_at = iso(started_at) if notified == "trigger" else prev.get("last_notified_at")
-                trig_hash = result_hash if triggered else prev.get("last_triggered_hash", "")
+                trig_hash = result_hash if condition_met and (triggered or not prev.get("last_triggered_hash"))                     else prev.get("last_triggered_hash", "")
                 if not condition_met and status != "error":
                     trig_hash = ""
                 last_trig = int(condition_met) if status != "error" else prev.get("last_triggered", 0)

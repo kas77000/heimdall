@@ -87,12 +87,14 @@ def evaluate_alert(alert: Alert, res: Resources, state: AlertState, now: datetim
             notify = "recovery"
 
     n = len(df)
+    what = conditions.describe(alert.condition, target).removeprefix("Triggers when ")
+    rows = f"{n} row{'s' if n != 1 else ''}"
     if triggered:
-        message = f"{alert.name}: TRIGGERED — {conditions.describe(alert.condition, target).lower()} ({n} rows)"
+        message = f"{alert.name}: fired, {what} ({rows})"
     elif met:
-        message = f"{alert.name}: still triggered, result unchanged ({n} rows)"
+        message = f"{alert.name}: still firing on the same result ({rows})"
     else:
-        message = f"{alert.name}: ok ({n} rows)"
+        message = f"{alert.name}: ok ({rows})"
     return Evaluation("triggered" if met else "ok", met, triggered, notify, message, outcomes,
                       judged_step=target, judged=df,
                       matching=conditions.matching_rows(alert.condition, df),

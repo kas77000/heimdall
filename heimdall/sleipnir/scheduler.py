@@ -97,7 +97,7 @@ class Sleipnir:
                 outcome, detail = "failed", f"{note}; {exc}"
         self.client.post(f"/schedules/{d.schedule_id}/fired",
                          {"at": iso(d.at), "outcome": outcome, "detail": detail})
-        log.info("schedule %s (%s alert %s): %s — %s", d.schedule_id, d.action, d.alert_id, outcome, detail)
+        log.info("schedule %s (%s alert %s): %s, %s", d.schedule_id, d.action, d.alert_id, outcome, detail)
         return {"schedule_id": d.schedule_id, "action": d.action, "outcome": outcome, "detail": detail}
 
     def run_forever(self) -> None:

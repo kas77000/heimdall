@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 from heimdall.config import Config
-from heimdall.core.chain import Pool, frame_to_records, records_to_frame
+from heimdall.core.chain import Pool, frame_to_records
 from heimdall.core.evaluate import AlertState, Evaluation, evaluate_alert
 from heimdall.core.kdb import PyKxClient
 from heimdall.core.models import Alert
@@ -47,6 +47,7 @@ class Engine:
         self.last_tick: Optional[datetime] = None
         self._last_retention: Optional[datetime] = None
         self.paused = False
+        self.sleipnir_seen: Optional[datetime] = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -159,12 +160,17 @@ class Engine:
     def _execute(self, alert: Alert, source: str) -> int:
         started = self.clock()
         t0 = time.monotonic()
-        ev = evaluate_alert(alert, self.pool, self._state(alert.id), started)
+        state = self._state(alert.id)
+        ev = evaluate_alert(alert, self.pool, state, started)
+        # A firing is an event, not every check that is still true: the run that
+        # starts an episode, or one that notified. Only those ask to be acknowledged,
+        # otherwise an alert firing for an hour would ask 180 times.
+        fired = ev.triggered and (ev.notify == "trigger" or not state.last_triggered)
         duration = time.monotonic() - t0
         snapshot = frame_to_records(ev.judged, self.cfg.snapshot_rows) if ev.judged is not None else None
         run_id = self.store.record_run(
             alert=alert, started_at=started, duration=duration, source=source, status=ev.status,
-            condition_met=ev.condition_met, triggered=ev.triggered, notified=ev.notify,
+            condition_met=ev.condition_met, triggered=fired, notified=ev.notify,
             row_count=ev.row_count, message=ev.message, error=ev.error,
             steps=[o.summary() for o in ev.steps], snapshot=snapshot, result_hash=ev.result_hash)
         if ev.notify:

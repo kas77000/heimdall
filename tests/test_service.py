@@ -207,3 +207,25 @@ def test_sleipnir_enables_runs_and_skips_late(huginn, store):
     assert outcomes == {"enable": "unchanged", "run": "skipped"}
     actions = [e["action"] for e in store.events(a.id)]
     assert "schedule skipped" in actions and "schedule applied" in actions
+
+
+def test_a_long_firing_asks_for_one_acknowledgement(store, engine):
+    a = _alert(store, rearm=Rearm(mode="transition"))
+    for _ in range(5):
+        engine.run_now(a.id)
+    assert store.count_runs(alert_id=a.id, status="triggered") == 5
+    assert store.count_runs(alert_id=a.id, unacknowledged=True) == 1
+
+
+def test_config_file_and_environment(tmp_path, monkeypatch):
+    from heimdall import config
+    f = tmp_path / "h.toml"
+    f.write_text('[muninn]\npath = "x.db"\n[huginn]\nport = 9001\nworkers = 2\n'
+                 '[sleipnir]\nurl = "http://h:9001"\ntick_secs = 3\n[bifrost]\nurl = "http://b"\n')
+    cfg = config.load(f)
+    assert (cfg.db_path, cfg.port, cfg.workers, cfg.huginn_url, cfg.sleipnir_tick_secs, cfg.bifrost_url) == \
+        ("x.db", 9001, 2, "http://h:9001", 3.0, "http://b")
+    monkeypatch.setenv("HEIMDALL_PORT", "9100")
+    monkeypatch.setenv("HEIMDALL_TOKEN", "t")
+    cfg = config.load(f)
+    assert cfg.port == 9100 and cfg.token == "t"

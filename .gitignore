@@ -12,3 +12,4 @@ dist/
 .streamlit/secrets.toml
 data/
 heimdall.toml
+bbgrelay-cache*

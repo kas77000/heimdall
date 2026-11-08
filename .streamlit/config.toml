@@ -1,0 +1,63 @@
+# Bifrost — always dark.
+#
+# Neutrals are tinted toward indigo (never pure black or white); a single violet
+# accent marks primary actions and the current selection. Red, green, amber and
+# grey are reserved for alert status and mean the same thing everywhere:
+#   red = fired · green = ok · amber = error · grey = off / idle.
+#
+# toolbarMode "minimal" removes the menu that carries the light/dark toggle, so
+# the theme cannot be switched from the browser.
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#7765ea"
+backgroundColor = "#111219"
+secondaryBackgroundColor = "#1a1b25"
+textColor = "#e4e5ee"
+borderColor = "#2c2e3c"
+linkColor = "#a497ff"
+linkUnderline = false
+codeTextColor = "#d6d3ff"
+codeBackgroundColor = "#171823"
+
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "6px"
+buttonRadius = "6px"
+
+redColor = "#f06470"
+greenColor = "#3ecf8e"
+orangeColor = "#e8a33d"
+yellowColor = "#e8c23d"
+blueColor = "#5aa9e6"
+violetColor = "#a497ff"
+grayColor = "#8b8ea0"
+
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+headingFont = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@500;600;700&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+codeFontSize = "13px"
+headingFontSizes = ["24px", "19px", "16px", "14px", "13px", "12px"]
+headingFontWeights = [600, 600, 600, 600, 500, 500]
+
+dataframeBorderColor = "#2c2e3c"
+dataframeHeaderBackgroundColor = "#1a1b25"
+
+chartCategoricalColors = ["#7765ea", "#3ecf8e", "#f06470", "#e8a33d", "#5aa9e6", "#a497ff", "#8b8ea0"]
+
+[theme.sidebar]
+backgroundColor = "#0d0e14"
+secondaryBackgroundColor = "#1a1b25"
+borderColor = "#24262f"
+textColor = "#e4e5ee"
+primaryColor = "#7765ea"

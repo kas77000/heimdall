@@ -135,3 +135,26 @@ A KDB connection with host `demo` is served by an in-memory mock with live
 -looking prices, orders and limits; a Bloomberg connection with URL `demo` is
 an in-process fake returning deterministic prices and limit up/down fields.
 The whole system can be exercised on a laptop.
+
+## Bifrost
+
+Always dark: the theme is set in `.streamlit/config.toml` and the toolbar menu
+that would let a viewer switch it is removed. Neutrals are tinted toward
+indigo, one violet accent marks primary actions and the current selection, and
+red, green, amber and grey mean fired, ok, error and off everywhere, always
+beside a word so colour is never the only signal.
+
+| Page | For |
+|---|---|
+| Overview | What needs attention now (fired, failing, unacknowledged), today's counts, every alert with its last and next check. Refreshes every 10 s. |
+| History | Runs with filters and a 14-day chart; a run's detail shows each step's request, the judged table and every delivery. Changes (the audit log). Clean up, now or by policy. |
+| Alerts | Every definition: open, duplicate, switch on or off, export, delete (history kept or not). |
+| Builder | Steps, Trigger, Notify, Details. Test run executes the chain on Huginn without recording or notifying, and lists each step's columns for the next step's references. Save is disabled while Huginn reports problems. `?alert=<id>` opens one directly. |
+| Schedules | Days-and-time or raw cron, in a named zone, with the next firing shown before saving; warns when Sleipnir has not checked in. |
+| Settings | Connections (with a test), the script registry (with a trial run), SMTP, import and export. |
+
+## Acknowledgement
+
+A run is a *firing* when it starts an episode (the condition was false before)
+or when it sent a notification. Only firings wait to be acknowledged, so an
+alert that stays true for an hour asks once, not once per check.
