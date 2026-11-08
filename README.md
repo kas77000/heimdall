@@ -19,6 +19,8 @@ Sleipnir is Odin's eight-legged horse. The design is in
 
 ## Run it
 
+The full installation and deployment guide is [docs/SETUP.md](docs/SETUP.md).
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -e ".[dev,kdb]"
