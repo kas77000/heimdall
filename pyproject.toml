@@ -33,3 +33,4 @@ include = ["heimdall*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["e2e: starts the real processes (about a minute); deselect with -m \"not e2e\""]
