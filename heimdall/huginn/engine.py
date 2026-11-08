@@ -32,12 +32,12 @@ def smtp_from(settings: dict) -> SmtpSettings:
 class Engine:
     def __init__(self, store: Muninn, cfg: Config, pool: Pool | None = None,
                  clock: Callable[[], datetime] = utcnow,
-                 email_fn=None, webhook_fn=None):
+                 email_fn=None):
         self.store = store
         self.cfg = cfg
         self.pool = pool or Pool(store.connection, store.script, kdb_factory=PyKxClient)
         self.clock = clock
-        self._deliver_kw = {k: v for k, v in (("email_fn", email_fn), ("webhook_fn", webhook_fn)) if v}
+        self._deliver_kw = {"email_fn": email_fn} if email_fn else {}
         self._executor = ThreadPoolExecutor(max_workers=max(1, cfg.workers), thread_name_prefix="huginn")
         self._inflight: set[int] = set()
         self._inflight_lock = threading.Lock()

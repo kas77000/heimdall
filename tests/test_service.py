@@ -13,7 +13,7 @@ def _alert(store, **kw):
     base = dict(name="orders exist", interval_secs=10, enabled=True,
                 steps=[KdbStep(name="o", connection="demo_kdb", table="orders")],
                 condition=Condition(type="has_rows"), rearm=Rearm(mode="transition"),
-                channels=Channels(email_to=["desk@example.com"], webhooks=["http://hook"]))
+                channels=Channels(email_to=["desk@example.com"]))
     base.update(kw)
     return store.save_alert(Alert(**base))
 
@@ -25,7 +25,7 @@ def test_run_records_history_and_notifies_once_on_transition(store, engine, sent
     r1 = store.run(engine.run_now(a.id))
     assert r1["status"] == "triggered" and r1["triggered"] and r1["notified"] == "trigger"
     assert r1["snapshot"]["total"] == 5 and r1["steps"][0]["rows"] == 5
-    assert [d["channel"] for d in r1["deliveries"]] == ["email", "webhook"]
+    assert [(d["channel"], d["ok"]) for d in r1["deliveries"]] == [("email", True)]
     r2 = store.run(engine.run_now(a.id))
     assert r2["status"] == "triggered" and r2["notified"] is None     # transition: no repeat
     assert len(sent["email"]) == 1

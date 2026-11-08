@@ -6,7 +6,7 @@ Started here, each on a free port, against a throwaway database:
 * Sleipnir        ``python -m heimdall sleipnir`` (ticking every second)
 * Bifrost         ``python -m heimdall bifrost``  (Streamlit server)
 * BbgRelay        ``python -m bbgrelay_server --fake`` (the real relay, synthetic Bloomberg)
-* an SMTP server and a webhook receiver, in this process, that record what arrives
+* an SMTP server, in this process, that records what arrives
 
 KDB is the built-in mock (host ``demo``): a real kdb+ needs a licence and a server.
 
@@ -24,7 +24,6 @@ import sys
 import textwrap
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -105,32 +104,12 @@ class _SmtpHandler(socketserver.StreamRequestHandler):
                 self.wfile.write(b"250 ok\r\n")
 
 
-class HookSink(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(self, port):
-        self.posts: list[dict] = []
-        super().__init__(("127.0.0.1", port), _HookHandler)
-
-
-class _HookHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        self.server.posts.append(json.loads(body or b"{}"))
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-    def log_message(self, *a):
-        pass
-
-
 # -- the stack -------------------------------------------------------------------
 
 class Stack:
     def __init__(self, tmp: Path):
         self.tmp = tmp
-        self.ports = {k: free_port() for k in ("huginn", "bifrost", "relay", "smtp", "hook")}
+        self.ports = {k: free_port() for k in ("huginn", "bifrost", "relay", "smtp")}
         self.url = f"http://127.0.0.1:{self.ports['huginn']}"
         self.procs: dict[str, subprocess.Popen] = {}
         self.config = tmp / "heimdall.toml"
@@ -189,10 +168,9 @@ def stack(tmp_path_factory):
     pytest.importorskip("bbgrelay_server", reason="BbgRelay is not installed in this environment")
     tmp = tmp_path_factory.mktemp("heimdall-e2e")
     s = Stack(tmp)
-    smtp, hook = SmtpSink(s.ports["smtp"]), HookSink(s.ports["hook"])
-    for server in (smtp, hook):
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-    s.smtp, s.hook = smtp, hook
+    smtp = SmtpSink(s.ports["smtp"])
+    threading.Thread(target=smtp.serve_forever, daemon=True).start()
+    s.smtp = smtp
     try:
         s.start("relay", ["-m", "bbgrelay_server", "--fake", "--port", str(s.ports["relay"]),
                           "--log-level", "warning"], cwd=tmp)   # its cache files stay out of the repo
@@ -203,7 +181,7 @@ def stack(tmp_path_factory):
     finally:
         for name in list(s.procs):
             s.stop(name)
-        smtp.shutdown(); hook.shutdown()
+        smtp.shutdown()
         s.http.close()
 
 
@@ -255,13 +233,12 @@ ALERT = {
     ],
     "condition": {"type": "has_rows"},
     "rearm": {"mode": "transition"},
-    "channels": {"email_to": ["desk@example.com"], "webhooks": [], "notify_on_recovery": True},
+    "channels": {"email_to": ["desk@example.com"], "notify_on_recovery": True},
 }
 
 
 def test_03_preview_runs_every_kind_of_step(stack):
     alert = json.loads(json.dumps(ALERT))
-    alert["channels"]["webhooks"] = [f"http://127.0.0.1:{stack.ports['hook']}/hook"]
     p = stack.call("POST", "/alerts/preview", json=alert)
     assert p["problems"] == []
     assert [s["error"] for s in p["steps"]] == [None, None, None, None], p["steps"]
@@ -275,7 +252,6 @@ def test_03_preview_runs_every_kind_of_step(stack):
 
 def test_04_engine_runs_it_and_notifies_once(stack):
     alert = json.loads(json.dumps(ALERT))
-    alert["channels"]["webhooks"] = [f"http://127.0.0.1:{stack.ports['hook']}/hook"]
     created = stack.call("POST", "/alerts", json=alert)
     stack.alert_id = created["id"]
 
@@ -288,14 +264,14 @@ def test_04_engine_runs_it_and_notifies_once(stack):
     assert later["status"] == "triggered" and later["notified"] is None and not later["triggered"]
 
     detail = stack.call("GET", f"/runs/{first['id']}")
-    assert {d["channel"]: d["ok"] for d in detail["deliveries"]} == {"email": True, "webhook": True}
+    assert [(d["channel"], d["ok"]) for d in detail["deliveries"]] == [("email", True)]
     assert [s["name"] for s in detail["steps"]] == ["orders", "px", "priced", "tagged"]
     assert detail["snapshot"]["total"] >= 1
 
     mail = wait_until(lambda: stack.smtp.messages, 10, "an email")
     assert mail[0]["rcpt"] == ["desk@example.com"]
     assert "E2E orders priced through Bloomberg" in mail[0]["data"]
-    assert len(stack.hook.posts) == 1 and "TRIGGERED" in stack.hook.posts[0]["text"]
+    assert "Subject: [Heimdall] E2E orders priced through Bloomberg: TRIGGERED" in mail[0]["data"]
     assert len(stack.smtp.messages) == 1                       # transition: once
 
 
@@ -323,10 +299,12 @@ def test_06_errors_and_recovery_are_notified(stack):
         "name": "E2E flag", "enabled": False, "interval_secs": 0,
         "steps": [{"kind": "script", "name": "flag", "script": "flag"}],
         "condition": {"type": "any_row", "column": "lag", "op": ">", "value": 60},
-        "channels": {"webhooks": [f"http://127.0.0.1:{stack.ports['hook']}/flag"],
+        "channels": {"email_to": ["oncall@example.com"],
                      "notify_on_error": True, "error_after": 2, "notify_on_recovery": True}})
     run = lambda: stack.call("POST", f"/alerts/{alert['id']}/run")   # noqa: E731
-    posts = lambda: [p["text"].split("\n")[0] for p in stack.hook.posts if "E2E flag" in p["text"]]  # noqa: E731
+    def subjects():
+        return [line.split(": ", 1)[1] for m in stack.smtp.messages for line in m["data"].splitlines()
+                if line.startswith("Subject: ") and "E2E flag" in line]
 
     state.write_text('[{"feed": "TSE", "lag": 95}]')
     assert run()["notified"] == "trigger"
@@ -337,8 +315,8 @@ def test_06_errors_and_recovery_are_notified(stack):
     assert [r["status"] for r in (first, second, third)] == ["error", "error", "error"]
     assert [r["notified"] for r in (first, second, third)] == [None, "error", None]
     assert "feed handler unreachable" in second["error"]
-    assert posts() == ["*[Heimdall] E2E flag: TRIGGERED*", "*[Heimdall] E2E flag: RECOVERED*",
-                       "*[Heimdall] E2E flag: ERROR*"]
+    assert subjects() == ["[Heimdall] E2E flag: TRIGGERED", "[Heimdall] E2E flag: RECOVERED",
+                          "[Heimdall] E2E flag: ERROR"]
 
 
 def test_07_sleipnir_runs_a_schedule_on_the_minute(stack):

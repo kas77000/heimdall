@@ -7,7 +7,7 @@ whether or not anyone has a browser open. Dashboards stay in KdbMonitor.
 
 | Part | Role |
 |---|---|
-| **Huginn** | The service: an HTTP API and an engine that runs every enabled alert on its interval, records each run, and sends email and webhook notifications. |
+| **Huginn** | The service: an HTTP API and an engine that runs every enabled alert on its interval, records each run, and sends email notifications. |
 | **Muninn** | The store Huginn owns (SQLite): alert definitions, connections, the script registry, schedules, and the history of every run, notification and change. |
 | **Sleipnir** | The scheduler: switches alerts on and off, or runs them, at cron times in each schedule's own time zone. |
 | **Bifrost** | The Streamlit app (always dark) where alerts are built, watched, and their history read and cleaned up. |
@@ -115,8 +115,8 @@ go first. An automatic policy can do the same every hour.
   Muninn, the API, Sleipnir and every Bifrost page, wired together in one
   process.
 * **End to end** (`tests/e2e/`): starts the real Huginn, Sleipnir, Bifrost and
-  BbgRelay's fake server, with an SMTP server and a webhook receiver, and takes
-  an alert through a test run, the engine, email and webhook delivery, error
+  BbgRelay's fake server, with an SMTP server, and takes
+  an alert through a test run, the engine, email delivery, error
   and recovery notifications, a cron schedule, history cleanup and a Huginn
   restart.
 

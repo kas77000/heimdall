@@ -1,4 +1,4 @@
-"""Telling people: email over SMTP and JSON webhooks (Teams, Slack)."""
+"""Telling people: email over SMTP."""
 from __future__ import annotations
 
 import html
@@ -10,7 +10,6 @@ from email.mime.text import MIMEText
 from typing import Callable, Optional
 
 import pandas as pd
-import requests
 
 from heimdall.core import conditions
 from heimdall.core.evaluate import Evaluation
@@ -42,7 +41,7 @@ class Message:
 
 @dataclass
 class Delivery:
-    channel: str            # email | webhook
+    channel: str            # email
     target: str
     ok: bool
     error: str = ""
@@ -112,16 +111,8 @@ def send_email(smtp: SmtpSettings, to: list[str], msg: Message) -> None:
         s.sendmail(smtp.sender, to, mime.as_string())
 
 
-def post_webhook(url: str, msg: Message) -> None:
-    # {"text": ...} is understood by Slack and by Teams incoming webhooks alike.
-    r = requests.post(url, json={"text": f"*{msg.subject}*\n{msg.text}"}, timeout=15)
-    if r.status_code >= 400:
-        raise RuntimeError(f"webhook answered {r.status_code}: {r.text[:200]}")
-
-
 def deliver(alert: Alert, msg: Message, smtp: SmtpSettings,
-            email_fn: Callable[[SmtpSettings, list[str], Message], None] = send_email,
-            webhook_fn: Callable[[str, Message], None] = post_webhook) -> list[Delivery]:
+            email_fn: Callable[[SmtpSettings, list[str], Message], None] = send_email) -> list[Delivery]:
     out: list[Delivery] = []
     to = [a.strip() for a in alert.channels.email_to if a.strip()]
     if to:
@@ -130,12 +121,4 @@ def deliver(alert: Alert, msg: Message, smtp: SmtpSettings,
             out.append(Delivery("email", ", ".join(to), True))
         except Exception as exc:  # noqa: BLE001
             out.append(Delivery("email", ", ".join(to), False, str(exc)))
-    for url in alert.channels.webhooks:
-        if not url.strip():
-            continue
-        try:
-            webhook_fn(url.strip(), msg)
-            out.append(Delivery("webhook", url.strip(), True))
-        except Exception as exc:  # noqa: BLE001
-            out.append(Delivery("webhook", url.strip(), False, str(exc)))
     return out

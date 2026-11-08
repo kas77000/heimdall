@@ -93,8 +93,8 @@ subscripts and lambdas are refused at save time.
 * **Re-arm policy** decides whether a triggered run notifies: every run, only
   on the transition into triggered, after a cooldown, or only when the result
   differs from the last triggered one (order-insensitive fingerprint).
-* **Channels**: email (SMTP, HTML with the first rows of the result) and
-  webhooks (Teams/Slack JSON). Optionally notify on error after N consecutive
+* **Channel**: email (SMTP, HTML with the first rows of the result).
+  Optionally notify on error after N consecutive
   errors, and on recovery. Every attempt is recorded with its outcome.
 * **Interval**: each enabled alert runs every `interval_secs`. An interval of
   0 means *only when Sleipnir or a person says so*.

@@ -506,12 +506,9 @@ def _lines(text: str) -> list[str]:
 
 def _notify(d: dict) -> None:
     ch = d["channels"]
-    a, b = st.columns(2)
-    ch["email_to"] = _lines(a.text_area("Email to", height=90, key=c.seed(K("n_to"), "\n".join(ch.get("email_to", []))),
-                                        placeholder="one address per line"))
-    ch["webhooks"] = _lines(b.text_area("Webhooks (Teams, Slack)", height=90,
-                                        key=c.seed(K("n_hooks"), "\n".join(ch.get("webhooks", []))),
-                                        placeholder="https://… one per line"))
+    ch["email_to"] = _lines(st.text_area("Email to", height=90,
+                                         key=c.seed(K("n_to"), "\n".join(ch.get("email_to", []))),
+                                         placeholder="one address per line"))
     ch["subject"] = st.text_input("Subject", key=c.seed(K("n_subj"), ch.get("subject", "")),
                                   placeholder=f"[Heimdall] {d['name']}")
     a, b, h = st.columns(3)
@@ -520,7 +517,7 @@ def _notify(d: dict) -> None:
         ch["error_after"] = int(b.number_input("After this many failures in a row", min_value=1, max_value=50,
                                                key=c.seed(K("n_errn"), ch.get("error_after", 3))))
     ch["notify_on_recovery"] = h.toggle("Tell me when it clears", key=c.seed(K("n_rec"), ch.get("notify_on_recovery", False)))
-    if not ch["email_to"] and not ch["webhooks"]:
+    if not ch["email_to"]:
         st.caption("No one will be told. Firings still show in Overview and History.")
     elif st.button("Send a test notification", icon=":material/send:"):
         res = c.call(lambda: c.huginn().post("/alerts/test-notification", _clean(d)))

@@ -194,7 +194,6 @@ class Rearm(BaseModel):
 
 class Channels(BaseModel):
     email_to: list[str] = Field(default_factory=list)
-    webhooks: list[str] = Field(default_factory=list)
     subject: str = ""                # empty = "[Heimdall] <alert name>"
     notify_on_error: bool = False
     error_after: int = 3             # consecutive errors before an error notifies

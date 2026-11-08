@@ -75,15 +75,16 @@ def _has_named_index(df: pd.DataFrame) -> bool:
 class PyKxClient:
     """Real client over a pykx IPC connection, reopened once if it drops."""
 
-    def __init__(self, host: str, port: int, timeout: float = 30.0):
+    def __init__(self, host: str, port: int):
         import pykx as kx  # imported lazily: tests and demo mode never need it
         self._kx = kx
-        self.host, self.port, self.timeout = host, port, timeout
+        self.host, self.port = host, port
         self._lock = threading.Lock()
         self._conn = self._open()
 
     def _open(self):
-        return self._kx.SyncQConnection(host=self.host, port=self.port, timeout=self.timeout)
+        # Opened exactly as KdbMonitor opens it, which works against the real servers.
+        return self._kx.SyncQConnection(host=self.host, port=self.port)
 
     def query(self, q: str) -> pd.DataFrame:
         with self._lock:

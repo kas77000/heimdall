@@ -18,15 +18,14 @@ def store():
 
 @pytest.fixture
 def sent():
-    return {"email": [], "webhook": []}
+    return {"email": []}
 
 
 @pytest.fixture
 def engine(store, sent):
     cfg = Config(db_path=":memory:", workers=2, bifrost_url="http://bifrost")
     e = Engine(store, cfg, pool=Pool(store.connection, store.script, kdb_factory=lambda h, p: None),
-               email_fn=lambda smtp, to, msg: sent["email"].append((to, msg)),
-               webhook_fn=lambda url, msg: sent["webhook"].append((url, msg)))
+               email_fn=lambda smtp, to, msg: sent["email"].append((to, msg)))
     yield e
     e.stop(wait=False)
 
