@@ -346,34 +346,79 @@ than `run_grace_secs` late, noting it in History → Changes.
 
 ## 12. Keep it running (Windows)
 
-Huginn and Sleipnir should start with the machine and restart if they stop.
-Task Scheduler is built into Windows and is enough. Run these in an
-administrator PowerShell, with paths adjusted, as the account that has the
-environment variables (token, SMTP password, relay token):
+Heimdall should start with the machine and come back if it stops. Task
+Scheduler is built into Windows and is enough, with one scheduled task that runs
+`heimdall all` in a loop: `heimdall all` stops every part as soon as one of them
+stops, and the loop starts them all again 30 seconds later. Logs go to
+`data\logs\huginn.log`, `sleipnir.log` and `bifrost.log`.
+
+> Do not rely on Task Scheduler's *If the task fails, restart every …* option.
+> It only restarts a task that fails to **start**; a part that starts and later
+> crashes stays down. Ending a task also leaves the Python processes it started
+> running. Both were checked on Windows 11.
+
+In an **administrator** PowerShell, with the path adjusted. The task runs as
+the account that has the environment variables (token, SMTP password, relay
+token), whether or not anyone is logged on:
 
 ```powershell
-$h = "C:\heimdall"   # where you cloned it
+$h = "C:\heimdall"   # where you cloned it; spaces in the path are fine (not an apostrophe)
+New-Item -ItemType Directory -Force "$h\data\logs" | Out-Null
 
-schtasks /Create /TN "Heimdall Huginn" /SC ONSTART /RU "DOMAIN\svc-heimdall" /RP * `
-  /TR "cmd /c cd /d $h && $h\.venv\Scripts\python.exe -m heimdall huginn >> $h\data\logs\huginn.log 2>&1"
+$cred = Get-Credential "DOMAIN\svc-heimdall"   # asks for the account's password
 
-schtasks /Create /TN "Heimdall Sleipnir" /SC ONSTART /RU "DOMAIN\svc-heimdall" /RP * `
-  /TR "cmd /c cd /d $h && $h\.venv\Scripts\python.exe -m heimdall sleipnir >> $h\data\logs\sleipnir.log 2>&1"
-
-schtasks /Create /TN "Heimdall Bifrost" /SC ONSTART /RU "DOMAIN\svc-heimdall" /RP * `
-  /TR "cmd /c cd /d $h && $h\.venv\Scripts\python.exe -m heimdall bifrost --port 8501 >> $h\data\logs\bifrost.log 2>&1"
+$loop = "Set-Location -LiteralPath '$h'; while (`$true) { & '.\.venv\Scripts\python.exe' -m heimdall all; Start-Sleep 30 }"
+$action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$loop`""
+$trigger  = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName "Heimdall" -Action $action -Trigger $trigger -Settings $settings `
+  -User $cred.UserName -Password $cred.GetNetworkCredential().Password -RunLevel Limited -Force
 ```
 
-Then, in Task Scheduler, open each task → *Settings* → tick **If the task
-fails, restart every 1 minute**, and untick **Stop the task if it runs longer
-than**. Create `data\logs` first.
+The account needs the *Log on as a batch job* right on the server (your IT may
+already grant it to service accounts). Start it now, without a reboot:
 
-If you prefer real Windows services, NSSM (`nssm install "Heimdall Huginn"
-C:\heimdall\.venv\Scripts\python.exe -m heimdall huginn`, with *Startup
-directory* set to the Heimdall folder) does the same with service restarts.
+```powershell
+Start-ScheduledTask -TaskName "Heimdall"
+```
+
+**Stop it.** End the task, then the Python processes it started:
+
+```powershell
+Stop-ScheduledTask -TaskName "Heimdall"
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -match 'heimdall|streamlit' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+Start it again with `Start-ScheduledTask -TaskName "Heimdall"`; remove it (after
+stopping) with `Unregister-ScheduledTask -TaskName "Heimdall" -Confirm:$false`.
+Do not also run `heimdall all` by hand while the task runs: the ports would
+already be in use.
+
+**Parts on different machines.** The task above runs all three parts on one
+machine. To run them separately (for example Bifrost elsewhere), use real
+Windows services with NSSM, which restarts a service whenever it exits. For
+each part:
+
+```powershell
+nssm install "Heimdall Huginn" C:\heimdall\.venv\Scripts\python.exe -m heimdall huginn
+nssm set "Heimdall Huginn" AppDirectory C:\heimdall
+nssm set "Heimdall Huginn" AppStdout C:\heimdall\data\logs\huginn.log
+nssm set "Heimdall Huginn" AppStderr C:\heimdall\data\logs\huginn.log
+nssm set "Heimdall Huginn" ObjectName DOMAIN\svc-heimdall <password>
+nssm start "Heimdall Huginn"
+```
+
+and the same with `sleipnir`, or `bifrost --port 8501`, in place of `huginn`.
 
 Allow the ports through the firewall for the machines that need them: 8765
 (Huginn) for Sleipnir and Bifrost, 8501 (Bifrost) for browsers.
+
+To host Heimdall on a desktop PC instead of a server, for colleagues to use from
+their browsers, see [LOCAL-HOSTING.md](LOCAL-HOSTING.md): its script does all of
+this for you.
 
 ## 13. Back up, move, upgrade
 

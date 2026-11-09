@@ -7,6 +7,34 @@ nothing: they open a link.
 This guide covers only what is different about hosting on a PC. Installing,
 connections, scripts, email and alerts are described in [SETUP.md](SETUP.md).
 
+## Quick setup: one script does it all
+
+`scripts\local-host.cmd` does sections 2, 3, 5, 6 and 7 for you. Double-click it,
+or from the Heimdall folder:
+
+```powershell
+scripts\local-host.cmd setup
+```
+
+It creates `.venv` and installs Heimdall if they are missing, writes
+`heimdall.toml` with this PC's name (an existing one is left as it is), stops
+the PC sleeping while plugged in, registers the logon task, starts Heimdall, and
+prints the link to share. No administrator rights needed.
+
+Afterwards:
+
+| Command | What it does |
+|---|---|
+| `scripts\local-host.cmd status` | Whether Huginn, Sleipnir and Bifrost are running, and the links |
+| `scripts\local-host.cmd stop` | Stops Heimdall (it starts again at next logon) |
+| `scripts\local-host.cmd start` | Starts it again |
+| `scripts\local-host.cmd restart` | Stop then start, e.g. after editing `heimdall.toml` |
+| `scripts\local-host.cmd firewall` | Lets other PCs connect (section 4); Windows asks for administrator |
+| `scripts\local-host.cmd remove` | Stops it and removes the logon task; your data and config stay |
+
+The rest of this guide explains each step, for doing it by hand or
+understanding what the script did.
+
 - [1. How it works](#1-how-it-works)
 - [2. Install](#2-install)
 - [3. Configure](#3-configure)

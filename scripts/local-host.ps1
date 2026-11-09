@@ -1,0 +1,230 @@
+<#
+.SYNOPSIS
+    Host Heimdall on this PC, as described in docs/LOCAL-HOSTING.md.
+
+.DESCRIPTION
+    local-host.cmd setup      install if needed, configure, keep the PC awake,
+                              start Heimdall now and at every logon
+    local-host.cmd status     is it running, and the link to share
+    local-host.cmd start      start it (after stop)
+    local-host.cmd stop       stop it (it starts again at next logon)
+    local-host.cmd restart    stop, then start (e.g. after editing heimdall.toml)
+    local-host.cmd firewall   let other PCs reach Bifrost (asks for administrator)
+    local-host.cmd remove     stop it and remove the logon task
+
+    Nothing here needs administrator except "firewall".
+#>
+param(
+    [Parameter(Position = 0)]
+    [ValidateSet("setup", "status", "start", "stop", "restart", "firewall", "remove", "help")]
+    [string]$Action = "help"
+)
+
+$ErrorActionPreference = "Stop"
+$Root     = Split-Path -Parent $PSScriptRoot          # the Heimdall checkout
+$Py       = Join-Path $Root ".venv\Scripts\python.exe"
+$Config   = Join-Path $Root "heimdall.toml"
+$TaskName = "Heimdall"
+$RuleName = "Heimdall Bifrost"
+$Port     = 8501
+
+function Say($msg)  { Write-Host "  $msg" }
+function Ok($msg)   { Write-Host "  [ok] $msg" -ForegroundColor Green }
+function Warn($msg) { Write-Host "  [!]  $msg" -ForegroundColor Yellow }
+
+function Get-HeimdallProcesses {
+    Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+        Where-Object { $_.CommandLine -match 'heimdall|streamlit' }
+}
+
+function Test-Url($url) {
+    try { (Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200 } catch { $false }
+}
+
+function Get-ShareLink {
+    $name = $env:COMPUTERNAME
+    if (Test-Path $Config) {
+        $m = Select-String -Path $Config -Pattern '^\s*url\s*=\s*"(http[^"]*:8501[^"]*)"' | Select-Object -First 1
+        if ($m) { return $m.Matches[0].Groups[1].Value }
+    }
+    "http://${name}:$Port"
+}
+
+# --- setup steps -----------------------------------------------------------
+
+function Install-Heimdall {
+    if (Test-Path $Py) {
+        & $Py -c "import heimdall, streamlit, uvicorn" 2>$null
+        if ($LASTEXITCODE -eq 0) { Ok "Python environment ready (.venv)"; return }
+    }
+    Say "Installing Heimdall into .venv (a few minutes the first time)..."
+    if (-not (Test-Path $Py)) {
+        $base = Get-Command py -ErrorAction SilentlyContinue
+        if ($base) { & py -3 -m venv (Join-Path $Root ".venv") }
+        else {
+            $base = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $base) { throw "Python 3.11+ is not installed. Install it from python.org, then run setup again." }
+            & python -m venv (Join-Path $Root ".venv")
+        }
+    }
+    & $Py -m pip install --quiet --upgrade pip
+    & $Py -m pip install --quiet -e "$Root[kdb]"
+    if ($LASTEXITCODE -ne 0) { throw "pip install failed; see the output above." }
+    Ok "Heimdall installed"
+}
+
+function New-Config {
+    if (Test-Path $Config) { Ok "heimdall.toml already exists; left as it is"; return }
+    $text = @"
+[muninn]
+path = "data/heimdall.db"
+
+[huginn]
+host = "127.0.0.1"          # only Bifrost and Sleipnir, on this PC, talk to Huginn
+port = 8765
+token_env = "HEIMDALL_TOKEN"
+workers = 4
+snapshot_rows = 200
+
+[sleipnir]
+url = "http://127.0.0.1:8765"
+tick_secs = 15
+run_grace_secs = 300
+
+[bifrost]
+url = "http://$($env:COMPUTERNAME):$Port"   # the link put in alert emails; must work from colleagues' PCs
+
+"@
+    [IO.File]::WriteAllText($Config, $text, (New-Object Text.UTF8Encoding $false))
+    Ok "heimdall.toml created (link: http://$($env:COMPUTERNAME):$Port)"
+}
+
+function Set-KeepAwake {
+    powercfg /change standby-timeout-ac 0
+    powercfg /change hibernate-timeout-ac 0
+    Ok "PC set never to sleep or hibernate while plugged in"
+    if (Get-CimInstance Win32_Battery) {
+        Warn "Laptop: also set 'When I close the lid' to 'Do nothing' (plugged in), and keep it plugged in"
+    }
+}
+
+function Register-HeimdallTask {
+    if ($Root.Contains("'")) { throw "The folder path contains an apostrophe ('): move the Heimdall folder and run setup again." }
+    $loop     = "Set-Location -LiteralPath '$Root'; while (`$true) { & '.\.venv\Scripts\python.exe' -m heimdall all; Start-Sleep 30 }"
+    $action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$loop`""
+    $trigger  = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+    Ok "Logon task '$TaskName' registered: Heimdall starts when you log in, and restarts if it crashes"
+}
+
+# --- running ---------------------------------------------------------------
+
+function Stop-Heimdall {
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $TaskName
+    }
+    $procs = @(Get-HeimdallProcesses)
+    $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep 2
+    if (@(Get-HeimdallProcesses).Count -eq 0) { Ok "Heimdall stopped" }
+    else { Warn "Some Heimdall processes are still running; try again" }
+}
+
+function Start-Heimdall {
+    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+        throw "Not set up yet: run 'local-host.cmd setup' first."
+    }
+    if (@(Get-HeimdallProcesses).Count -gt 0) { Say "Heimdall is already running; stopping it first"; Stop-Heimdall }
+    Start-ScheduledTask -TaskName $TaskName
+    Say "Starting (up to a minute)..."
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
+        if ((Test-Url "http://127.0.0.1:8765/health") -and (Test-Url "http://localhost:$Port/_stcore/health")) { break }
+        Start-Sleep 2
+    }
+    Show-Status
+}
+
+function Show-Status {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Write-Host ""
+    if ($task) { Say "Logon task:  $($task.State)" } else { Warn "Logon task:  not set up (run setup)" }
+    $huginn  = Test-Url "http://127.0.0.1:8765/health"
+    $bifrost = Test-Url "http://localhost:$Port/_stcore/health"
+    if ($huginn)  { Ok "Huginn (service) answering" } else { Warn "Huginn (service) not answering; see data\logs\huginn.log" }
+    if ($huginn) {
+        try {
+            $seen = (Invoke-RestMethod "http://127.0.0.1:8765/status" -TimeoutSec 3).engine.sleipnir_seen
+            if ($seen -and ((Get-Date).ToUniversalTime() - ([DateTime]::Parse($seen)).ToUniversalTime()).TotalSeconds -lt 90) {
+                Ok "Sleipnir (scheduler) on time"
+            } else { Warn "Sleipnir (scheduler) not seen recently; see data\logs\sleipnir.log" }
+        } catch { Warn "Could not read Huginn's status: $($_.Exception.Message)" }
+    }
+    if ($bifrost) { Ok "Bifrost (web app) answering" } else { Warn "Bifrost (web app) not answering; see data\logs\bifrost.log" }
+    if (-not (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)) {
+        Say "Firewall:    other PCs cannot connect yet (run 'local-host.cmd firewall' when they need to)"
+    } else { Say "Firewall:    open to other PCs on port $Port" }
+    Write-Host ""
+    Say "On this PC:         http://localhost:$Port"
+    Say "Link for others:    $(Get-ShareLink)"
+    Write-Host ""
+}
+
+function Open-Firewall {
+    $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $admin) {
+        Say "Asking Windows for administrator rights to add the firewall rule..."
+        Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "firewall")
+        if (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue) { Ok "Firewall rule '$RuleName' in place" }
+        else { Warn "The firewall rule was not added (administrator rights refused?)" }
+        return
+    }
+    if (-not (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Protocol TCP -LocalPort $Port `
+            -Action Allow -Profile Domain, Private | Out-Null
+    }
+    Ok "Firewall rule '$RuleName' allows port $Port on Domain and Private networks"
+    $public = @(Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq "Public" })
+    foreach ($p in $public) {
+        Warn "Network '$($p.InterfaceAlias)' is set to Public, where this rule does not apply. On the office network ask IT, or set it to Private if it is trusted."
+    }
+    Start-Sleep 5   # when run elevated, this window closes on its own: leave time to read it
+}
+
+# --- main ------------------------------------------------------------------
+
+Write-Host ""
+Write-Host "  Heimdall local hosting: $Action" -ForegroundColor Cyan
+Write-Host ""
+switch ($Action) {
+    "setup" {
+        Install-Heimdall
+        New-Config
+        New-Item -ItemType Directory -Force (Join-Path $Root "data\logs") | Out-Null
+        Set-KeepAwake
+        Register-HeimdallTask
+        Start-Heimdall
+        Say "Done. Heimdall now starts by itself whenever you log in."
+    }
+    "status"   { Show-Status }
+    "start"    { Start-Heimdall }
+    "stop"     { Stop-Heimdall }
+    "restart"  { Stop-Heimdall; Start-Heimdall }
+    "firewall" { Open-Firewall }
+    "remove" {
+        Stop-Heimdall
+        if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+        }
+        Ok "Logon task removed. Your data (data\heimdall.db) and heimdall.toml are untouched."
+        if (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue) {
+            Say "The firewall rule remains; to remove it, in an administrator PowerShell:"
+            Say "  Remove-NetFirewallRule -DisplayName '$RuleName'"
+        }
+    }
+    default { Get-Help $PSCommandPath -Detailed | Select-Object -ExpandProperty Description | Out-String | Write-Host }
+}
