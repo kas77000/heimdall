@@ -58,7 +58,7 @@ Find the host PC's network name (and its address, as a fallback):
 
 ```powershell
 hostname
-ipconfig        # the "IPv4 Address" of the network adapter you use
+ipconfig        # the "IPv4 Address" of the adapter on the office network
 ```
 
 Create `heimdall.toml` in `C:\heimdall`:
@@ -90,7 +90,9 @@ run_grace_secs = 300
 url = "http://YOUR-PC-NAME:8501"   # the link put in alert emails; must work from colleagues' PCs
 ```
 
-Replace `YOUR-PC-NAME` with the output of `hostname`. If colleagues cannot
+Replace `YOUR-PC-NAME` with the output of `hostname`. In `ipconfig`, ignore
+adapters of a personal VPN (NordVPN's *NordLynx*, for example): colleagues
+cannot reach that address. If colleagues cannot
 reach the PC by name (section 8), use the IPv4 address instead. An address
 handed out by DHCP can change, so ask IT for a fixed one or a DNS name if you
 rely on it.
@@ -160,47 +162,63 @@ Bifrost afterwards.
 
 ## 7. Start it automatically at logon
 
-So Heimdall comes back after a reboot or Windows update without you starting
-it, create three scheduled tasks that run when you log on. In a normal
-PowerShell (not administrator), as yourself:
+So Heimdall comes back after a reboot, a Windows update or a crash without you
+starting it, create one scheduled task that runs when you log on. It runs
+`heimdall all` in a loop. `heimdall all` stops every part as soon as one of them
+stops, and the loop then starts them all again 30 seconds later.
+
+In a normal PowerShell (administrator is **not** needed), as yourself:
 
 ```powershell
-$h = "C:\heimdall"
-New-Item -ItemType Directory -Force "$h\data\logs" | Out-Null
+$h = "C:\heimdall"   # the folder you cloned into; spaces in the path are fine
 
-schtasks /Create /TN "Heimdall Huginn" /SC ONLOGON /RL LIMITED `
-  /TR "cmd /c cd /d $h && $h\.venv\Scripts\python.exe -m heimdall huginn >> $h\data\logs\huginn.log 2>&1"
-
-schtasks /Create /TN "Heimdall Sleipnir" /SC ONLOGON /RL LIMITED `
-  /TR "cmd /c cd /d $h && $h\.venv\Scripts\python.exe -m heimdall sleipnir >> $h\data\logs\sleipnir.log 2>&1"
-
-schtasks /Create /TN "Heimdall Bifrost" /SC ONLOGON /RL LIMITED `
-  /TR "cmd /c cd /d $h && $h\.venv\Scripts\python.exe -m heimdall bifrost --port 8501 >> $h\data\logs\bifrost.log 2>&1"
+$loop = "Set-Location -LiteralPath '$h'; while (`$true) { & '.\.venv\Scripts\python.exe' -m heimdall all; Start-Sleep 30 }"
+$action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$loop`""
+$trigger  = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName "Heimdall" -Action $action -Trigger $trigger -Settings $settings -Force
 ```
 
-Then open **Task Scheduler**, and for each of the three tasks:
+(If the folder path itself contains an apostrophe `'`, move the folder: the
+loop quotes the path with apostrophes.)
 
-- **Settings** tab: tick **If the task fails, restart every 1 minute**, and
-  untick **Stop the task if it runs longer than**.
-- **Conditions** tab: untick **Start the task only if the computer is on AC
-  power** and **Stop if the computer switches to battery power** (laptops).
+The settings mean: no time limit, keep running on battery, and start late if
+the logon was missed. Logs go to `data\logs\huginn.log`, `sleipnir.log` and
+`bifrost.log`, as with `heimdall all` by hand.
 
-To start them now without logging off: right-click each task → **Run**, or
+**Start it now** without logging off:
 
 ```powershell
-schtasks /Run /TN "Heimdall Huginn"
-schtasks /Run /TN "Heimdall Sleipnir"
-schtasks /Run /TN "Heimdall Bifrost"
+Start-ScheduledTask -TaskName "Heimdall"
 ```
 
-To stop them: right-click → **End**, or `schtasks /End /TN "Heimdall Huginn"`
-(and the same for the others).
+**Stop it.** Ending the task alone is not enough: Task Scheduler ends the loop,
+but the Python processes it started keep running. Stop both:
 
-Do not also run `python -m heimdall all` while the tasks are running: the
+```powershell
+Stop-ScheduledTask -TaskName "Heimdall"
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -match 'heimdall|streamlit' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+**Remove it** (stop it first, as above):
+
+```powershell
+Unregister-ScheduledTask -TaskName "Heimdall" -Confirm:$false
+```
+
+Do not also run `python -m heimdall all` by hand while the task is running: the
 ports would already be in use.
 
-Tasks created this way run only while you are logged on. After a reboot,
-Heimdall starts once you log in.
+The task runs only while you are logged on. After a reboot, Heimdall starts
+once you log in.
+
+> Why not three tasks with Task Scheduler's *If the task fails, restart every
+> 1 minute*? That option only restarts a task that fails to **start**. A part
+> that starts and later crashes is not restarted, so the loop above is used
+> instead.
 
 ## 8. Check from another PC
 
@@ -271,10 +289,10 @@ does not include run history.
 | Works at `localhost:8501` on the host, not from other PCs | Firewall (section 4), network profile is `Public`, or IT policy blocks inbound connections. Check with `Test-NetConnection` (section 8). |
 | Works by IP address, not by name | The PC name is not in DNS. Use the IP address, and ask IT for a fixed address or DNS name. |
 | Links in alert emails do not open | `[bifrost] url` in `heimdall.toml` is still `localhost`. Set it to `http://YOUR-PC-NAME:8501` and restart. |
-| Page down every morning | The PC slept or rebooted overnight. Section 5; check that the tasks in section 7 exist and ran (Task Scheduler → *Last Run Result*). |
-| **Address already in use** / port 8501 or 8765 busy | Heimdall is already running (a task, or another `heimdall all` window). End the tasks or close the other window. |
-| Bifrost says **Huginn is not answering** | The Huginn task is not running; read `data\logs\huginn.log`. |
-| Sidebar shows **Sleipnir not seen** | The Sleipnir task is not running; read `data\logs\sleipnir.log`. |
+| Page down every morning | The PC slept or rebooted overnight, or nobody logged in after a reboot. Section 5; check that the *Heimdall* task from section 7 exists and is *Running* (`Get-ScheduledTask Heimdall`). |
+| **Address already in use** / port 8501 or 8765 busy | Heimdall is already running (the task, another `heimdall all` window, or processes left behind by ending the task alone). Stop it as in section 7. |
+| Bifrost says **Huginn is not answering** | Huginn stopped; read `data\logs\huginn.log`. With the task from section 7, everything restarts within about a minute. |
+| Sidebar shows **Sleipnir not seen** | Sleipnir stopped or cannot reach Huginn; read `data\logs\sleipnir.log`. |
 
 Everything else is in [SETUP.md §15](SETUP.md#15-troubleshooting).
 
@@ -283,7 +301,7 @@ Everything else is in [SETUP.md §15](SETUP.md#15-troubleshooting).
 When a server is available:
 
 1. Install Heimdall on the server ([SETUP.md](SETUP.md)).
-2. Stop the tasks on your PC, then copy `data\heimdall.db` to the server's
+2. Stop Heimdall on your PC (section 7), then copy `data\heimdall.db` to the server's
    `data\` folder (or use the online backup in section 10). Alerts, history,
    connections and schedules all come with it.
 3. On the server, set `[bifrost] url` to the server's address, recreate the
@@ -291,7 +309,6 @@ When a server is available:
    [SETUP.md §12](SETUP.md#12-keep-it-running-windows).
 4. Check that the server can reach the same KDB hosts, BbgRelay and SMTP, and
    that any registered scripts exist at the same paths.
-5. Send everyone the new link, then delete the tasks on your PC
-   (`schtasks /Delete /TN "Heimdall Huginn" /F`, and the same for the others)
-   and remove the firewall rule
+5. Send everyone the new link, then remove the task on your PC (section 7)
+   and the firewall rule
    (`Remove-NetFirewallRule -DisplayName "Heimdall Bifrost"`).
