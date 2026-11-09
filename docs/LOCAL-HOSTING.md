@@ -26,7 +26,15 @@ For Bloomberg steps, also install the BbgRelay client into `.venv` (see
 [SETUP.md §3](SETUP.md#3-install); on Python 3.10 it needs
 `--ignore-requires-python`). The script does not install it.
 
-Afterwards:
+Afterwards, double-click one of these in the `scripts` folder:
+
+| File | What it does |
+|---|---|
+| `stop-heimdall.cmd` | Stops Heimdall (it starts again at your next logon) |
+| `start-heimdall.cmd` | Starts it again |
+| `status-heimdall.cmd` | Shows whether it is running, and the link to share |
+
+or use the same actions, and a few more, from a prompt:
 
 | Command | What it does |
 |---|---|
