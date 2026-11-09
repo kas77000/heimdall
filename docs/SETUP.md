@@ -30,7 +30,7 @@ need, and finally how to keep it running and healthy.
  ─────────                     ──────────────────                      ─────────────────
  Bifrost  ──── HTTP ────►  Huginn  (API + engine)  ──── WebSocket ───►  BbgRelay server ─► Terminal
  (browser)                   │   ▲         │
-                             │   │ HTTP    └──── IPC ────►  KDB servers
+                             │   │ pipe    └──── IPC ────►  KDB servers
                              ▼   │
                           Muninn  Sleipnir                    SMTP server ◄── email
                           (SQLite) (scheduler)
@@ -40,7 +40,7 @@ need, and finally how to keep it running and healthy.
 |---|---|---|
 | **Huginn** | The service: HTTP API plus the engine that runs alerts and sends email. The only process that opens the database. | A machine that is always on and can reach the KDB servers, the BbgRelay server, the SMTP server, and the folder where your scripts live. |
 | **Muninn** | A SQLite file owned by Huginn (`data/heimdall.db` by default). Not a process. | Beside Huginn, on a local disk (not a network share). |
-| **Sleipnir** | The scheduler. Talks only to Huginn's API. | Usually the same machine as Huginn. |
+| **Sleipnir** | The scheduler. Talks only to Huginn's API, through a local pipe when they share a machine (no HTTP, no network, nothing a proxy can block). | The same machine as Huginn. On another machine it falls back to HTTP. |
 | **Bifrost** | The Streamlit app. Talks only to Huginn's API. | Anywhere that can reach Huginn: the server, or each person's desk. |
 | **BbgRelay server** | Your existing relay that puts the Bloomberg API on the network. | The machine with the Bloomberg Terminal. |
 
@@ -145,7 +145,8 @@ workers = 4                       # alerts evaluated at the same time
 snapshot_rows = 200               # rows of the judged table kept with each run
 
 [sleipnir]
-url = "http://huginn-host:8765"   # where Sleipnir (and Bifrost) find Huginn
+url = "http://huginn-host:8765"   # where Bifrost finds Huginn; Sleipnir too when Huginn is
+                                  # on another machine (on the same one it uses a local pipe)
 tick_secs = 15
 run_grace_secs = 300              # a scheduled run later than this is skipped
 
@@ -424,7 +425,8 @@ nssm start "Heimdall Huginn"
 and the same with `sleipnir`, or `bifrost --port 8501`, in place of `huginn`.
 
 Allow the ports through the firewall for the machines that need them: 8765
-(Huginn) for Sleipnir and Bifrost, 8501 (Bifrost) for browsers.
+(Huginn) for Bifrost on other machines, 8501 (Bifrost) for browsers. Sleipnir on
+the same machine as Huginn needs no port: it uses a local pipe.
 
 To host Heimdall on a desktop PC instead of a server, for colleagues to use from
 their browsers, see [LOCAL-HOSTING.md](LOCAL-HOSTING.md): its script does all of
@@ -497,7 +499,7 @@ On a running system:
 |---|---|
 | Bifrost says **Huginn is not answering** | Huginn is not running, or `HEIMDALL_URL` / `[sleipnir] url` points elsewhere. Check `http://huginn-host:8765/health` from the Bifrost machine and the firewall. |
 | **missing or wrong X-Heimdall-Token** | The token variable differs between machines, or was set with `setx` and the shell was not reopened. |
-| Sidebar shows **Sleipnir not seen** | Sleipnir is not running or cannot reach Huginn; read `data\logs\sleipnir.log`. Schedules will not happen until it runs. |
+| Sidebar shows **Sleipnir not seen** | Sleipnir is not running or cannot reach Huginn; read `data\logs\sleipnir.log`. Schedules will not happen until it runs. It reaches a Huginn on the same machine through the pipe `\\.\pipe\heimdall-huginn-<port>`, so both must use the same `[huginn] port` and run as the same Windows account (the pipe's key is in that account's temp folder). |
 | KDB **Test** fails | Huginn's machine cannot reach host:port, or pykx is missing from the environment (`pip install -e ".[kdb]"`). The same host and port work in KdbMonitor. |
 | Bloomberg step: **BbgRelay client is not installed** | `pip install -e C:\path\to\BbgRelay` into Heimdall's `.venv` on the Huginn machine. |
 | Bloomberg step times out or is refused | The relay is down, the URL is wrong, or the token variable on the Huginn machine does not match the relay's. Run BbgRelay's smoke test on the Bloomberg machine. |

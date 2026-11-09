@@ -75,7 +75,7 @@ understanding what the script did.
  browser ───────────┘                    │ http://127.0.0.1:8765
                                          ▼
                                       Huginn (API + engine) ──► KDB, BbgRelay, SMTP
-                                         ▲            │
+                                         ▲ local pipe │
                                       Sleipnir     Muninn (data\heimdall.db)
 ```
 
@@ -83,6 +83,8 @@ understanding what the script did.
 - Only **Bifrost** is reachable from the network. Huginn listens on
   `127.0.0.1`, so no other machine can reach it directly and no API token is
   needed.
+- **Sleipnir** does not use HTTP or the network at all: it talks to Huginn
+  through a local Windows pipe, so a company proxy or firewall cannot block it.
 - The database stays on the host's local disk. **Do not put the Heimdall folder
   or the database on a shared drive**: SQLite on a network share can be
   corrupted, and users would need Python installed to run it from there.
@@ -118,7 +120,7 @@ and edit it so it contains:
 path = "data/heimdall.db"
 
 [huginn]
-host = "127.0.0.1"          # only Bifrost and Sleipnir, on this PC, talk to Huginn
+host = "127.0.0.1"          # only Bifrost, on this PC, talks to Huginn over HTTP
 port = 8765
 token_env = "HEIMDALL_TOKEN"
 workers = 4

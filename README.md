@@ -44,7 +44,7 @@ Each part also runs on its own, which is how they go on separate machines:
 
 ```powershell
 python -m heimdall huginn [--demo] [--host 0.0.0.0] [--port 8765]
-python -m heimdall sleipnir [--url http://huginn-host:8765]
+python -m heimdall sleipnir [--url http://huginn-host:8765] [--http]   # local pipe to a Huginn on this machine; --http forces HTTP
 python -m heimdall bifrost [--port 8501]
 ```
 

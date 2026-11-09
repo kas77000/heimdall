@@ -8,7 +8,7 @@ KdbMonitor. Everything is Python.
 ## The four parts
 
 ```
-            HTTP (JSON)                     HTTP (JSON)
+            HTTP (JSON)                  local pipe (JSON)
  Bifrost  ───────────────►  Huginn  ◄──────────────────  Sleipnir
  Streamlit                  FastAPI + engine              cron loop
  (build, read)              │                             (enable / disable / run on time)
@@ -31,13 +31,33 @@ KdbMonitor. Everything is Python.
 * **Sleipnir** is a separate process that reads schedules from Huginn and, when
   one is due, asks Huginn to enable, disable or run an alert. It owns no data;
   each schedule's last firing is recorded back through the API, so a restart
-  neither repeats nor loses a firing (see *Missed firings*).
+  neither repeats nor loses a firing (see *Missed firings*). It reaches a
+  Huginn on the same machine through a local pipe, not HTTP (see *Sleipnir's
+  pipe*), and a Huginn elsewhere over HTTP.
 * **Bifrost** is the Streamlit app. It talks only to Huginn's API and never
   opens the database, so it can run on any desk.
 
 Why an API rather than a shared database: a test run must execute where the
 connections and scripts live, which is wherever Huginn runs, and one writer
 keeps SQLite out of trouble.
+
+### Sleipnir's pipe
+
+Sleipnir runs beside Huginn and serves no one, so it does not use HTTP or the
+network: on Windows it talks to Huginn through the named pipe
+`\\.\pipe\heimdall-huginn-<port>` (a Unix socket elsewhere). Nothing is
+listening on a TCP port for it, so no proxy or firewall can come between them.
+This is what broke HTTP on work PCs, where the company proxy caught even calls
+to `127.0.0.1`.
+
+Each message is the API call Sleipnir would have made (method, path, headers,
+body) as JSON; Huginn passes it to its own API app, so validation, the token,
+History and Sleipnir's heartbeat behave as over HTTP. On every start Huginn
+writes a random key to `heimdall-huginn-<port>.key` in the user's temp folder;
+a client must prove it holds the key (an HMAC challenge, both ways) before
+Huginn reads its request, and nothing on the pipe is unpickled.
+`python -m heimdall sleipnir --http` forces HTTP, and a `[sleipnir] url` naming
+another machine uses HTTP. Code: `heimdall/pipe.py`.
 
 ## Alerts are chains of steps
 
