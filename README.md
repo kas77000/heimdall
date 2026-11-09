@@ -23,6 +23,8 @@ and a short presentation in [docs/presentation/Heimdall.pptx](docs/presentation/
 ## Run it
 
 The full installation and deployment guide is [docs/SETUP.md](docs/SETUP.md).
+To host Heimdall on your own PC for colleagues to use from their browsers, see
+[docs/LOCAL-HOSTING.md](docs/LOCAL-HOSTING.md).
 
 ```powershell
 python -m venv .venv
