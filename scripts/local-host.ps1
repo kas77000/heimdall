@@ -36,9 +36,31 @@ function Say($msg)  { Write-Host "  $msg" }
 function Ok($msg)   { Write-Host "  [ok] $msg" -ForegroundColor Green }
 function Warn($msg) { Write-Host "  [!]  $msg" -ForegroundColor Yellow }
 
+# Heimdall's own processes, and nothing else: an editor's Python tools, a notebook or
+# another Streamlit app started from this folder must not be touched.
+#   the logon task's loop      powershell ... -m heimdall all ...
+#   the parts                  python -m heimdall all|huginn|sleipnir|bifrost, python -m heimdall.huginn|.sleipnir
+#   Bifrost's Streamlit        python -m streamlit run ...\heimdall\bifrost\app.py
+$HeimdallPattern = '-m\s+heimdall(\.huginn|\.sleipnir|\s+(all|huginn|sleipnir|bifrost))\b|streamlit\s+run\s+"?[^"]*\\heimdall\\bifrost\\app\.py'
+
 function Get-HeimdallProcesses {
-    Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-        Where-Object { $_.CommandLine -match 'heimdall|streamlit' }
+    $own = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe' OR Name='powershell.exe' OR Name='heimdall.exe'" |
+        Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -match $HeimdallPattern })
+    # Whatever holds Huginn's or Bifrost's port is Heimdall too, even when Windows does not
+    # let us read its command line (started from an administrator window, for example).
+    $ids = @($own | ForEach-Object { $_.ProcessId })
+    foreach ($c in @(Get-NetTCPConnection -State Listen -LocalPort 8765, $Port -ErrorAction SilentlyContinue)) {
+        if ($ids -notcontains $c.OwningProcess) {
+            $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)"
+            if ($p -and $p.Name -match '^python') { $own += $p; $ids += $p.ProcessId }
+        }
+    }
+    $own
+}
+
+function Get-ListeningPorts {
+    @(Get-NetTCPConnection -State Listen -LocalPort 8765, $Port -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty LocalPort -Unique)
 }
 
 function Test-Url($url) {
@@ -155,11 +177,37 @@ function Stop-Heimdall {
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $TaskName
     }
-    $procs = @(Get-HeimdallProcesses)
-    $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep 2
-    if (@(Get-HeimdallProcesses).Count -eq 0) { Ok "Heimdall stopped" }
-    else { Warn "Some Heimdall processes are still running; try again" }
+    # The loop first, so it cannot start anything again; then each part with everything it
+    # started (taskkill /T). Repeat until nothing is left, for up to 15 seconds.
+    $deadline = (Get-Date).AddSeconds(15)
+    $denied = @{}
+    do {
+        $procs = @(Get-HeimdallProcesses | Sort-Object { if ($_.Name -eq 'powershell.exe') { 0 } else { 1 } })
+        foreach ($p in $procs) {
+            # through cmd, so taskkill's stderr ("not found": a tree kill already took it)
+            # comes back as text instead of a PowerShell error
+            $out = cmd.exe /c "taskkill /F /T /PID $($p.ProcessId) 2>&1"
+            if ("$out" -match 'Access is denied|Accès refusé') { $denied[$p.ProcessId] = $p }
+        }
+        if ($procs.Count) { Start-Sleep -Milliseconds 700 }
+        $left = @(Get-HeimdallProcesses)
+        $ports = @(Get-ListeningPorts)
+    } while (($left.Count -or $ports.Count) -and (Get-Date) -lt $deadline)
+
+    if (-not $left.Count -and -not $ports.Count) { Ok "Heimdall stopped"; return }
+
+    Warn "Heimdall could not be stopped completely. Still running:"
+    foreach ($p in $left) {
+        $what = if ($p.CommandLine) { ($p.CommandLine -replace '\s+', ' ').Trim() } else { "(command line not readable)" }
+        if ($what.Length -gt 110) { $what = $what.Substring(0, 107) + "..." }
+        Say "  PID $($p.ProcessId)  $($p.Name)  $what"
+    }
+    if ($ports.Count) { Say "  Ports still in use: $($ports -join ', ')" }
+    if ($denied.Count -or ($left | Where-Object { -not $_.CommandLine })) {
+        Say "Windows refused to stop them: they were probably started from an administrator window."
+        Say "Right-click stop-heimdall.cmd > Run as administrator, or close that window."
+    }
+    throw "Heimdall is not fully stopped (see above)."
 }
 
 function Start-Heimdall {
