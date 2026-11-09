@@ -6,6 +6,9 @@ Started here, each on a free port, against a throwaway database:
 * Sleipnir        ``python -m heimdall sleipnir`` (ticking every second)
 * Bifrost         ``python -m heimdall bifrost``  (Streamlit server)
 * BbgRelay        ``python -m bbgrelay_server --fake`` (the real relay, synthetic Bloomberg)
+                  BbgRelay's server needs Python 3.11+. To test Heimdall on 3.10, point
+                  ``HEIMDALL_E2E_RELAY_PYTHON`` at a 3.11+ python.exe with BbgRelay installed:
+                  in real use the relay runs on the Bloomberg machine, with its own Python.
 * an SMTP server, in this process, that records what arrives
 
 KDB is the built-in mock (host ``demo``): a real kdb+ needs a licence and a server.
@@ -135,9 +138,9 @@ class Stack:
         self.http = httpx.Client(base_url=self.url, timeout=60,
                                  headers={"X-Heimdall-Token": TOKEN, "X-Heimdall-User": "e2e"})
 
-    def start(self, name: str, args: list[str], cwd: Path = ROOT) -> None:
+    def start(self, name: str, args: list[str], cwd: Path = ROOT, python: str = sys.executable) -> None:
         log = open(self.tmp / f"{name}.log", "w", encoding="utf-8")
-        self.procs[name] = subprocess.Popen([sys.executable, *args], cwd=cwd, env=self.env,
+        self.procs[name] = subprocess.Popen([python, *args], cwd=cwd, env=self.env,
                                             stdout=log, stderr=subprocess.STDOUT,
                                             **popen_group_kwargs())
 
@@ -172,7 +175,8 @@ def stack(tmp_path_factory):
     s.smtp = smtp
     try:
         s.start("relay", ["-m", "bbgrelay_server", "--fake", "--port", str(s.ports["relay"]),
-                          "--log-level", "warning"], cwd=tmp)   # its cache files stay out of the repo
+                          "--log-level", "warning"], cwd=tmp,   # its cache files stay out of the repo
+                python=os.environ.get("HEIMDALL_E2E_RELAY_PYTHON") or sys.executable)
         s.start_huginn()
         s.start("sleipnir", ["-m", "heimdall", "sleipnir"])
         s.start("bifrost", ["-m", "heimdall", "bifrost", "--port", str(s.ports["bifrost"])])

@@ -50,8 +50,10 @@ also runs there, so what you see while building is what the service will see.
 
 ## 2. Prerequisites
 
-- **Python 3.11 or newer** on every machine that runs a part (3.12 is what
-  Heimdall is developed and tested on).
+- **Python 3.10 or newer** on every machine that runs a part of Heimdall (3.12
+  is what Heimdall is developed on; the full test suite also passes on 3.10.6).
+  The BbgRelay *server* needs 3.11 or newer, but it runs on the Bloomberg
+  machine with its own Python.
 - **Git**, to clone the repository.
 - **Network access** from the Huginn machine to:
   - every KDB server you will query (host and port, no authentication, as in
@@ -83,6 +85,14 @@ from its own checkout:
 
 Only the client is needed on the Huginn machine. It has no blpapi dependency
 and needs no Bloomberg licence.
+
+On **Python 3.10**, pip refuses BbgRelay because its package asks for 3.11 (only
+its server needs it; the client works on 3.10, and Heimdall's end-to-end tests
+use it there). Install it with:
+
+```powershell
+.venv\Scripts\pip install --ignore-requires-python -e C:\path\to\BbgRelay
+```
 
 > Always use `.venv\Scripts\python`. A bare `python` may be another project's
 > environment, and Heimdall's dependencies would land in the wrong place.
@@ -464,6 +474,15 @@ server. They then take an alert through every step kind, email delivery,
 error and recovery emails, a cron schedule, cleanup and a restart. They use
 their own temporary database and free ports, so they never touch your real
 data.
+
+On Python 3.10 the BbgRelay server they start cannot run (it needs 3.11+).
+Point `HEIMDALL_E2E_RELAY_PYTHON` at a 3.11+ `python.exe` that has BbgRelay
+installed, and the tests start the relay with it:
+
+```powershell
+$env:HEIMDALL_E2E_RELAY_PYTHON = "C:\path\to\BbgRelay\.venv\Scripts\python.exe"
+.venv\Scripts\python -m pytest
+```
 
 On a running system:
 

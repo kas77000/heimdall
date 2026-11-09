@@ -16,15 +16,22 @@ or from the Heimdall folder:
 scripts\local-host.cmd setup
 ```
 
-It creates `.venv` and installs Heimdall if they are missing, writes
+It creates `.venv` and installs Heimdall if they are missing (with Python 3.10
+or newer: the `py` launcher's newest, else `python` on the PATH), writes
 `heimdall.toml` with this PC's name (an existing one is left as it is), stops
 the PC sleeping while plugged in, registers the logon task, starts Heimdall, and
 prints the link to share. No administrator rights needed.
+
+For Bloomberg steps, also install the BbgRelay client into `.venv` (see
+[SETUP.md §3](SETUP.md#3-install); on Python 3.10 it needs
+`--ignore-requires-python`). The script does not install it.
 
 Afterwards:
 
 | Command | What it does |
 |---|---|
+| `scripts\local-host.cmd setup -Python C:\path\to\python.exe` | The same, building `.venv` with that Python (when it is not on the PATH, or to choose a version) |
+| `scripts\local-host.cmd install` | Only creates `.venv` and installs Heimdall (also takes `-Python`) |
 | `scripts\local-host.cmd status` | Whether Huginn, Sleipnir and Bifrost are running, and the links |
 | `scripts\local-host.cmd stop` | Stops Heimdall (it starts again at next logon) |
 | `scripts\local-host.cmd start` | Starts it again |

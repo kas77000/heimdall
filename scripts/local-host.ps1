@@ -5,6 +5,8 @@
 .DESCRIPTION
     local-host.cmd setup      install if needed, configure, keep the PC awake,
                               start Heimdall now and at every logon
+    local-host.cmd install    only create .venv and install Heimdall
+                              (both accept -Python C:\path\to\python.exe; Python 3.10+)
     local-host.cmd status     is it running, and the link to share
     local-host.cmd start      start it (after stop)
     local-host.cmd stop       stop it (it starts again at next logon)
@@ -16,8 +18,10 @@
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("setup", "status", "start", "stop", "restart", "firewall", "remove", "help")]
-    [string]$Action = "help"
+    [ValidateSet("setup", "install", "status", "start", "stop", "restart", "firewall", "remove", "help")]
+    [string]$Action = "help",
+    # Python 3.10+ to build .venv with, when it is not on PATH (setup / install)
+    [string]$Python
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,25 +56,51 @@ function Get-ShareLink {
 
 # --- setup steps -----------------------------------------------------------
 
+function Test-PythonVersion($exe, [string[]]$pre = @()) {
+    # True when this interpreter is Python 3.10 or newer.
+    try { $v = & $exe @pre -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null } catch { return $null }
+    if ($LASTEXITCODE -ne 0 -or -not $v) { return $null }
+    $parts = "$v".Trim().Split(".")
+    [pscustomobject]@{ Version = "$v".Trim(); Ok = ([int]$parts[0] -gt 3) -or ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 10) }
+}
+
+function Find-BasePython {
+    # -Python wins; then the py launcher; then python on PATH.
+    $candidates = @()
+    if ($Python) {
+        if (-not (Test-Path $Python)) { throw "-Python: $Python does not exist." }
+        $candidates += , @($Python)          # named explicitly: use it or stop, never fall back
+    } else {
+        if (Get-Command py -ErrorAction SilentlyContinue) { $candidates += , @("py", "-3") }
+        if (Get-Command python -ErrorAction SilentlyContinue) { $candidates += , @("python") }
+    }
+    foreach ($c in $candidates) {
+        $exe = $c[0]; $pre = @($c | Select-Object -Skip 1)
+        $v = Test-PythonVersion $exe $pre
+        if ($v -and $v.Ok) { return [pscustomobject]@{ Exe = $exe; Pre = $pre; Version = $v.Version } }
+        if ($v) { Warn "$($c -join ' ') is Python $($v.Version); Heimdall needs 3.10 or newer" }
+    }
+    throw "No Python 3.10 or newer found. Install one from python.org, or pass its path: local-host.cmd setup -Python C:\path\to\python.exe"
+}
+
 function Install-Heimdall {
     if (Test-Path $Py) {
-        & $Py -c "import heimdall, streamlit, uvicorn" 2>$null
-        if ($LASTEXITCODE -eq 0) { Ok "Python environment ready (.venv)"; return }
+        & $Py -c "import heimdall.config, streamlit, uvicorn" 2>$null
+        if ($LASTEXITCODE -eq 0) { Ok "Python environment ready (.venv, Python $((Test-PythonVersion $Py).Version))"; return }
+    }
+    if (-not (Test-Path $Py)) {
+        $base = Find-BasePython
+        Say "Creating .venv with Python $($base.Version)..."
+        & $base.Exe @($base.Pre) -m venv (Join-Path $Root ".venv")
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Py)) { throw "Could not create .venv with $($base.Exe)." }
     }
     Say "Installing Heimdall into .venv (a few minutes the first time)..."
-    if (-not (Test-Path $Py)) {
-        $base = Get-Command py -ErrorAction SilentlyContinue
-        if ($base) { & py -3 -m venv (Join-Path $Root ".venv") }
-        else {
-            $base = Get-Command python -ErrorAction SilentlyContinue
-            if (-not $base) { throw "Python 3.11+ is not installed. Install it from python.org, then run setup again." }
-            & python -m venv (Join-Path $Root ".venv")
-        }
-    }
-    & $Py -m pip install --quiet --upgrade pip
-    & $Py -m pip install --quiet -e "$Root[kdb]"
-    if ($LASTEXITCODE -ne 0) { throw "pip install failed; see the output above." }
-    Ok "Heimdall installed"
+    & $Py -m pip install --quiet --disable-pip-version-check --upgrade pip
+    & $Py -m pip install --quiet --disable-pip-version-check -e "$Root[kdb]"
+    if ($LASTEXITCODE -ne 0) { throw "pip install failed; see the output above (behind a proxy? set HTTPS_PROXY first)." }
+    & $Py -c "import heimdall.config, streamlit, uvicorn" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "Heimdall was installed but does not import; see the output above." }
+    Ok "Heimdall installed (Python $((Test-PythonVersion $Py).Version))"
 }
 
 function New-Config {
@@ -200,31 +230,38 @@ function Open-Firewall {
 Write-Host ""
 Write-Host "  Heimdall local hosting: $Action" -ForegroundColor Cyan
 Write-Host ""
-switch ($Action) {
-    "setup" {
-        Install-Heimdall
-        New-Config
-        New-Item -ItemType Directory -Force (Join-Path $Root "data\logs") | Out-Null
-        Set-KeepAwake
-        Register-HeimdallTask
-        Start-Heimdall
-        Say "Done. Heimdall now starts by itself whenever you log in."
-    }
-    "status"   { Show-Status }
-    "start"    { Start-Heimdall }
-    "stop"     { Stop-Heimdall }
-    "restart"  { Stop-Heimdall; Start-Heimdall }
-    "firewall" { Open-Firewall }
-    "remove" {
-        Stop-Heimdall
-        if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+try {
+    switch ($Action) {
+        "setup" {
+            Install-Heimdall
+            New-Config
+            New-Item -ItemType Directory -Force (Join-Path $Root "data\logs") | Out-Null
+            Set-KeepAwake
+            Register-HeimdallTask
+            Start-Heimdall
+            Say "Done. Heimdall now starts by itself whenever you log in."
         }
-        Ok "Logon task removed. Your data (data\heimdall.db) and heimdall.toml are untouched."
-        if (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue) {
-            Say "The firewall rule remains; to remove it, in an administrator PowerShell:"
-            Say "  Remove-NetFirewallRule -DisplayName '$RuleName'"
+        "install"  { Install-Heimdall }
+        "status"   { Show-Status }
+        "start"    { Start-Heimdall }
+        "stop"     { Stop-Heimdall }
+        "restart"  { Stop-Heimdall; Start-Heimdall }
+        "firewall" { Open-Firewall }
+        "remove" {
+            Stop-Heimdall
+            if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+            }
+            Ok "Logon task removed. Your data (data\heimdall.db) and heimdall.toml are untouched."
+            if (Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue) {
+                Say "The firewall rule remains; to remove it, in an administrator PowerShell:"
+                Say "  Remove-NetFirewallRule -DisplayName '$RuleName'"
+            }
         }
+        default { Get-Help $PSCommandPath -Detailed | Select-Object -ExpandProperty Description | Out-String | Write-Host }
     }
-    default { Get-Help $PSCommandPath -Detailed | Select-Object -ExpandProperty Description | Out-String | Write-Host }
+} catch {
+    Write-Host "  [x]  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    exit 1
 }

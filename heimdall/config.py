@@ -7,9 +7,14 @@ variables that hold them (the API token, the SMTP password, relay tokens).
 from __future__ import annotations
 
 import os
-import tomllib
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python 3.10: the same parser, as a package
+    import tomli as tomllib
 
 
 @dataclass
