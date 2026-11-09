@@ -28,7 +28,7 @@ def _wait_for_huginn(url: str, timeout: float = 30.0) -> bool:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         try:
-            if httpx.get(url.rstrip("/") + "/health", timeout=2).status_code == 200:
+            if httpx.get(url.rstrip("/") + "/health", timeout=2, trust_env=False).status_code == 200:
                 return True
         except httpx.HTTPError:
             pass

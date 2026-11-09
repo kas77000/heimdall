@@ -229,3 +229,43 @@ def test_config_file_and_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("HEIMDALL_TOKEN", "t")
     cfg = config.load(f)
     assert cfg.port == 9100 and cfg.token == "t"
+
+
+def test_huginn_client_ignores_a_system_proxy(monkeypatch):
+    """A company proxy (environment or Windows registry) must not catch calls to Huginn."""
+    import http.server
+    import threading
+
+    from heimdall.client import HuginnClient
+
+    class Huginn(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    class Proxy(Huginn):
+        def do_GET(self):
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    servers = [http.server.ThreadingHTTPServer(("127.0.0.1", 0), h) for h in (Huginn, Proxy)]
+    for s in servers:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    huginn, proxy = (f"http://127.0.0.1:{s.server_address[1]}" for s in servers)
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(var, proxy)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    try:
+        assert HuginnClient(huginn).get("/health") == {"ok": True}
+    finally:
+        for s in servers:
+            s.shutdown()

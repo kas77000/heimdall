@@ -36,8 +36,12 @@ class HuginnClient:
         if user:
             headers["X-Heimdall-User"] = user
         self.url = url.rstrip("/")
+        # trust_env=False: Huginn is on this machine or the office network, never behind
+        # a proxy. Otherwise httpx takes the system proxy (on Windows from the registry,
+        # ignoring its "bypass for local addresses" list) and sends even 127.0.0.1
+        # through it, where a company proxy blocks it.
         self._http = httpx.Client(base_url=self.url, headers=headers, timeout=timeout,
-                                  transport=transport)
+                                  transport=transport, trust_env=False)
 
     def close(self) -> None:
         self._http.close()
