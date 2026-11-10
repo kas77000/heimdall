@@ -22,9 +22,8 @@ or newer: the `py` launcher's newest, else `python` on the PATH), writes
 the PC sleeping while plugged in, registers the logon task, starts Heimdall, and
 prints the link to share. No administrator rights needed.
 
-For Bloomberg steps, also install the BbgRelay client into `.venv` (see
-[SETUP.md §3](SETUP.md#3-install); on Python 3.10 it needs
-`--ignore-requires-python`). The script does not install it.
+For Bloomberg steps, also install `blpapi` into `.venv` with the `bloomberg`
+extra (see [SETUP.md §3](SETUP.md#3-install)). The script does not install it.
 
 Afterwards, double-click one of these in the `scripts` folder:
 
@@ -74,7 +73,7 @@ understanding what the script did.
  browser ──── http://HOST:8501 ────►  Bifrost (Streamlit, port 8501)
  browser ───────────┘                    │ http://127.0.0.1:8765
                                          ▼
-                                      Huginn (API + engine) ──► KDB, BbgRelay, SMTP
+                                      Huginn (API + engine) ──► KDB, B-PIPE, SMTP
                                          ▲ local pipe │
                                       Sleipnir     Muninn (data\heimdall.db)
 ```
@@ -303,9 +302,9 @@ cd C:\heimdall
 (Replace `S:\Backups\Heimdall` with your share.) This can be added as a fourth
 scheduled task, for example daily.
 
-Settings → Import / export in Bifrost also downloads every alert, schedule,
-connection and script as one JSON file. That is a good second copy, though it
-does not include run history.
+Settings → Import / export in Bifrost also downloads alerts, schedules,
+connections and scripts as one JSON file (choose *Everything*, or just one
+part). That is a good second copy, though it does not include run history.
 
 ## 11. Things to know
 
@@ -321,9 +320,11 @@ does not include run history.
 - **Scripts and connections run as you.** Scripts registered in Heimdall run
   on your PC with your Windows account, and KDB, Bloomberg and email are reached
   from your PC. Only register scripts you trust.
-- **Secrets.** SMTP passwords and relay tokens go in environment variables on
-  your PC (`setx NAME "value"`, then restart Heimdall), never in the database or
-  `heimdall.toml`. See [SETUP.md §5](SETUP.md#5-configure).
+- **Secrets.** Heimdall stores no passwords. Email goes through the company
+  mail relay without a login, and B-PIPE authorises Heimdall by its
+  application name. Only the API token lives in an environment variable, and
+  with Huginn on `127.0.0.1` it is not needed. See
+  [SETUP.md §5](SETUP.md#5-configure).
 - **Performance.** Every user's page and every alert check runs on your PC. A
   handful of users is fine; heavy use will be felt on your machine.
 
@@ -349,10 +350,10 @@ When a server is available:
 2. Stop Heimdall on your PC (section 7), then copy `data\heimdall.db` to the server's
    `data\` folder (or use the online backup in section 10). Alerts, history,
    connections and schedules all come with it.
-3. On the server, set `[bifrost] url` to the server's address, recreate the
-   environment variables (SMTP password, relay tokens), and start Heimdall as in
-   [SETUP.md §12](SETUP.md#12-keep-it-running-windows).
-4. Check that the server can reach the same KDB hosts, BbgRelay and SMTP, and
+3. On the server, set `[bifrost] url` to the server's address, set
+   `HEIMDALL_TOKEN` if Huginn will listen on the network, and start Heimdall as
+   in [SETUP.md §12](SETUP.md#12-keep-it-running-windows).
+4. Check that the server can reach the same KDB hosts, B-PIPE and SMTP, and
    that any registered scripts exist at the same paths.
 5. Send everyone the new link, then remove the task on your PC (section 7)
    and the firewall rule

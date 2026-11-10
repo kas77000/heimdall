@@ -35,7 +35,7 @@ REARM = {"transition": "When it starts firing", "on_change": "When the result ch
          "cooldown": "At most every…", "every_run": "Every run while it fires"}
 KIND_HELP = {
     "kdb": "Query a KDB server, guided or in raw q.",
-    "bloomberg": "Ask BbgRelay for reference (bdp) or live (snap) values.",
+    "bloomberg": "Ask Bloomberg B-PIPE for reference (bdp) or live (snap) values.",
     "script": "Run a script registered in Settings and read what it prints.",
     "compute": "Join, derive and filter tables from earlier steps. No query is sent.",
 }

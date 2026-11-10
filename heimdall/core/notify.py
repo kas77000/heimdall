@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import html
-import os
 import smtplib
 from dataclasses import dataclass
 from email.mime.multipart import MIMEMultipart
@@ -23,9 +22,6 @@ class SmtpSettings:
     host: str = ""
     port: int = 25
     sender: str = "heimdall@localhost"
-    username: str = ""
-    password_env: str = ""
-    starttls: bool = False
 
     @property
     def configured(self) -> bool:
@@ -103,11 +99,8 @@ def send_email(smtp: SmtpSettings, to: list[str], msg: Message) -> None:
     mime["Subject"], mime["From"], mime["To"] = msg.subject, smtp.sender, ", ".join(to)
     mime.attach(MIMEText(msg.text, "plain", "utf-8"))
     mime.attach(MIMEText(msg.html, "html", "utf-8"))
+    # The company mail relay: no login and no TLS, as KdbMonitor sends.
     with smtplib.SMTP(smtp.host, smtp.port, timeout=30) as s:
-        if smtp.starttls:
-            s.starttls()
-        if smtp.username:
-            s.login(smtp.username, os.environ.get(smtp.password_env, "") if smtp.password_env else "")
         s.sendmail(smtp.sender, to, mime.as_string())
 
 

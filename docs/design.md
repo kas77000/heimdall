@@ -21,8 +21,8 @@ KdbMonitor. Everything is Python.
   and runs the engine: every enabled alert is evaluated on its own interval, a
   run is recorded, and notifications go out. A test run (`/alerts/preview`)
   goes through the same code on the same machine, so what the builder shows is
-  what the service will see — the same KDB hosts, the same Bloomberg relay, the
-  same scripts.
+  what the service will see — the same KDB hosts, the same B-PIPE, the same
+  scripts.
 * **Muninn** is a library, not a process: the SQLite store Huginn owns. It
   holds connections, the script registry, alerts, schedules, per-alert state,
   the history of every run and every notification, and settings. History is
@@ -68,7 +68,7 @@ judged on one step's table — the last by default.
 | kind | what it does | output |
 |---|---|---|
 | `kdb` | a guided query (table, filters) or raw q, against a named KDB connection | the query's table |
-| `bloomberg` | `bdp` (reference / current values) or `snap` (live values) through a BbgRelay connection | one row per security, a `security` column plus one per field |
+| `bloomberg` | `bdp` (reference / current values: a ReferenceDataRequest on `//blp/refdata`) or `snap` (live values: a short `//blp/mktdata` subscription keeping each field's first value, up to about 10 s) against a B-PIPE connection, through `blpapi` | one row per security, a `security` column plus one per field |
 | `script` | runs a **registered** script with parameters | parsed from stdout: JSON, CSV, a single value, or just the exit code |
 | `compute` | joins two earlier tables, derives columns from guarded expressions, filters rows, keeps columns | the computed table |
 
@@ -145,14 +145,16 @@ than N days, keep the newest N per alert, everything for one alert, or all.
 ## Configuration
 
 `heimdall.toml` (see `heimdall.example.toml`), overridable with
-`HEIMDALL_*` environment variables. Secrets — the API token, SMTP password,
-relay tokens — are read from environment variables named in the config, never
-stored in Muninn.
+`HEIMDALL_*` environment variables. The one secret, the API token, is read
+from the environment variable named in the config, never stored in Muninn.
+SMTP is a server, port and sender address, with no login or TLS (the company
+relay). A B-PIPE connection is a host, port and application name
+(application-only authentication).
 
 ## Without the real systems
 
 A KDB connection with host `demo` is served by an in-memory mock with live
--looking prices, orders and limits; a Bloomberg connection with URL `demo` is
+-looking prices, orders and limits; a Bloomberg connection with host `demo` is
 an in-process fake returning deterministic prices and limit up/down fields.
 The whole system can be exercised on a laptop.
 
@@ -171,7 +173,7 @@ beside a word so colour is never the only signal.
 | Alerts | Every definition: open, duplicate, switch on or off, export, delete (history kept or not). |
 | Builder | Steps, Trigger, Notify, Details. Test run executes the chain on Huginn without recording or notifying, and lists each step's columns for the next step's references. Save is disabled while Huginn reports problems. `?alert=<id>` opens one directly. |
 | Schedules | Days-and-time or raw cron, in a named zone, with the next firing shown before saving; warns when Sleipnir has not checked in. |
-| Settings | Connections (with a test), the script registry (with a trial run), SMTP, import and export. |
+| Settings | Connections (new or edit, tested with the typed values before saving), the script registry (with a trial run), SMTP, import and export of chosen parts (connections, alerts, schedules, scripts). |
 
 ## Acknowledgement
 

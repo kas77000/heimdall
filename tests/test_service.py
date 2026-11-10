@@ -150,6 +150,38 @@ def test_api_preview_and_purge_and_export_import(huginn, store):
     assert len(huginn.get("/schedules")) == 3
 
 
+
+def test_export_and_import_one_part_at_a_time(huginn, store):
+    seed(store)
+    only = {p: huginn.get("/export", parts=p) for p in ("connections", "alerts", "schedules", "scripts")}
+    assert len(only["connections"]["connections"]) == 2 and not only["connections"]["alerts"]
+    assert len(only["alerts"]["alerts"]) == 3 and not only["alerts"]["schedules"]         and not only["alerts"]["connections"]
+    assert len(only["schedules"]["schedules"]) == 3 and not only["schedules"]["alerts"]
+    assert len(only["scripts"]["scripts"]) == 3 and not only["scripts"]["connections"]
+    everything = huginn.get("/export")
+
+    # schedules alone attach to the alerts already here, and are not doubled
+    rep = huginn.post("/import", only["schedules"])
+    assert rep["schedules"] == 0 and len(rep["skipped"]) == 3
+    for s in huginn.get("/schedules"):
+        huginn.delete(f"/schedules/{s['id']}")
+    rep = huginn.post("/import", everything, parts="schedules")
+    assert rep["schedules"] == 3 and rep["alerts"] == [] and rep["connections"] == []
+    assert len(huginn.get("/schedules")) == 3
+
+    # a schedule for an alert that is not here is skipped, and says so
+    lone = {"schedules": [{"alert": "Nobody", "action": "run", "cron": "0 9 * * *", "tz": "UTC"}]}
+    rep = huginn.post("/import", lone)
+    assert rep["schedules"] == 0 and "no alert called that here" in rep["skipped"][0]
+
+    # connections only, from a full file, replacing
+    rep = huginn.post("/import", everything, parts="connections", replace=True)
+    assert sorted(rep["connections"]) == ["demo_bbg", "demo_kdb"] and rep["alerts"] == []
+
+    from heimdall.client import HuginnError
+    with pytest.raises(HuginnError):
+        huginn.get("/export", parts="nonsense")
+
 def test_api_token(store, engine):
     from fastapi.testclient import TestClient
     from heimdall.huginn.api import create_app

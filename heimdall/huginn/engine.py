@@ -24,9 +24,7 @@ RETENTION_EVERY = timedelta(hours=1)
 def smtp_from(settings: dict) -> SmtpSettings:
     s = settings.get("smtp") or {}
     return SmtpSettings(host=s.get("host", ""), port=int(s.get("port", 25) or 25),
-                        sender=s.get("sender", "") or "heimdall@localhost",
-                        username=s.get("username", ""), password_env=s.get("password_env", ""),
-                        starttls=bool(s.get("starttls", False)))
+                        sender=s.get("sender", "") or "heimdall@localhost")
 
 
 class Engine:

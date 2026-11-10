@@ -20,8 +20,9 @@ dependencies = [
 
 [project.optional-dependencies]
 kdb = ["pykx>=2.5"]
-# BbgRelay's client is installed from its own checkout:
-#   pip install -e <path-to>/BbgRelay
+# Bloomberg B-PIPE. blpapi comes from Bloomberg's own package index:
+#   pip install -e ".[bloomberg]" --extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple/
+bloomberg = ["blpapi>=3.19"]
 dev = ["pytest>=8"]
 
 [project.scripts]

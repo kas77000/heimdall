@@ -29,7 +29,8 @@ To host Heimdall on your own PC for colleagues to use from their browsers, see
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -e ".[dev,kdb]"
-.venv\Scripts\pip install -e ..\..\Work\BbgRelay          # the Bloomberg relay client
+# for Bloomberg B-PIPE (blpapi comes from Bloomberg's package index):
+.venv\Scripts\pip install -e ".[dev,kdb,bloomberg]" --extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple/
 
 .venv\Scripts\python -m heimdall all --demo
 ```
@@ -49,8 +50,8 @@ python -m heimdall bifrost [--port 8501]
 ```
 
 Configuration is `heimdall.toml` (copy [heimdall.example.toml](heimdall.example.toml)),
-or `HEIMDALL_*` environment variables. Secrets are never stored: the config
-names the environment variable that holds each one. Set `HEIMDALL_TOKEN` on
+or `HEIMDALL_*` environment variables. The API token is never stored: the
+config names the environment variable that holds it. Set `HEIMDALL_TOKEN` on
 every machine before Huginn listens on anything but localhost.
 
 ## Building an alert
@@ -61,7 +62,7 @@ can use what earlier ones returned.
 | Step | Does |
 |---|---|
 | KDB | A guided query (table, columns, filters) or raw q against a KDB connection. |
-| Bloomberg | `bdp` (reference and current values) or `snap` (live values) through BbgRelay. |
+| Bloomberg | `bdp` (reference and current values) or `snap` (live values) through B-PIPE. |
 | Script | Runs a script registered in Settings and reads JSON, CSV, one value or only the exit code. |
 | Compute | Joins two earlier tables, adds columns from expressions, keeps rows where a test holds. |
 
@@ -121,8 +122,8 @@ go first. An automatic policy can do the same every hour.
 * **Integration** (`tests/test_service.py`, `tests/test_bifrost.py`): the engine,
   Muninn, the API, Sleipnir and every Bifrost page, wired together in one
   process.
-* **End to end** (`tests/e2e/`): starts the real Huginn, Sleipnir, Bifrost and
-  BbgRelay's fake server, with an SMTP server, and takes
+* **End to end** (`tests/e2e/`): starts the real Huginn, Sleipnir and Bifrost,
+  with an SMTP server and the built-in fake Bloomberg, and takes
   an alert through a test run, the engine, email delivery, error
   and recovery notifications, a cron schedule, history cleanup and a Huginn
   restart.

@@ -5,13 +5,10 @@ Started here, each on a free port, against a throwaway database:
 * Huginn          ``python -m heimdall huginn``   (API + engine, with an API token)
 * Sleipnir        ``python -m heimdall sleipnir`` (ticking every second)
 * Bifrost         ``python -m heimdall bifrost``  (Streamlit server)
-* BbgRelay        ``python -m bbgrelay_server --fake`` (the real relay, synthetic Bloomberg)
-                  BbgRelay's server needs Python 3.11+. To test Heimdall on 3.10, point
-                  ``HEIMDALL_E2E_RELAY_PYTHON`` at a 3.11+ python.exe with BbgRelay installed:
-                  in real use the relay runs on the Bloomberg machine, with its own Python.
 * an SMTP server, in this process, that records what arrives
 
-KDB is the built-in mock (host ``demo``): a real kdb+ needs a licence and a server.
+KDB and Bloomberg are the built-in fakes (host ``demo``): a real kdb+ needs a
+licence and a server, and B-PIPE needs Bloomberg's network and an application name.
 
 Run just these with ``pytest -m e2e``; skip them with ``pytest -m "not e2e"``.
 They take a little over a minute, because a cron schedule fires on the minute.
@@ -114,7 +111,7 @@ class _SmtpHandler(socketserver.StreamRequestHandler):
 class Stack:
     def __init__(self, tmp: Path):
         self.tmp = tmp
-        self.ports = {k: free_port() for k in ("huginn", "bifrost", "relay", "smtp")}
+        self.ports = {k: free_port() for k in ("huginn", "bifrost", "smtp")}
         self.url = f"http://127.0.0.1:{self.ports['huginn']}"
         self.procs: dict[str, subprocess.Popen] = {}
         self.config = tmp / "heimdall.toml"
@@ -167,16 +164,12 @@ class Stack:
 
 @pytest.fixture(scope="module")
 def stack(tmp_path_factory):
-    pytest.importorskip("bbgrelay_server", reason="BbgRelay is not installed in this environment")
     tmp = tmp_path_factory.mktemp("heimdall-e2e")
     s = Stack(tmp)
     smtp = SmtpSink(s.ports["smtp"])
     threading.Thread(target=smtp.serve_forever, daemon=True).start()
     s.smtp = smtp
     try:
-        s.start("relay", ["-m", "bbgrelay_server", "--fake", "--port", str(s.ports["relay"]),
-                          "--log-level", "warning"], cwd=tmp,   # its cache files stay out of the repo
-                python=os.environ.get("HEIMDALL_E2E_RELAY_PYTHON") or sys.executable)
         s.start_huginn()
         s.start("sleipnir", ["-m", "heimdall", "sleipnir"])
         s.start("bifrost", ["-m", "heimdall", "bifrost", "--port", str(s.ports["bifrost"])])
@@ -198,11 +191,8 @@ def test_01_token_is_required(stack):
 
 def test_02_connections_scripts_and_email(stack):
     stack.call("PUT", "/connections/oms", json={"name": "oms", "kind": "kdb", "host": "demo"})
-    stack.call("PUT", "/connections/bbg", json={"name": "bbg", "kind": "bloomberg",
-                                                "url": f"ws://127.0.0.1:{stack.ports['relay']}"})
-    relay = wait_until(lambda: (r := stack.call("POST", "/connections/bbg/test")) and r["ok"] and r, 40,
-                       "the relay to answer a ping")
-    assert relay["ok"], relay
+    stack.call("PUT", "/connections/bbg", json={"name": "bbg", "kind": "bloomberg", "host": "demo"})
+    assert stack.call("POST", "/connections/bbg/test")["ok"]
     assert stack.call("POST", "/connections/oms/test")["ok"]
 
     script = stack.tmp / "tag_orders.py"

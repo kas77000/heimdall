@@ -15,7 +15,7 @@ EXAMPLES = Path(__file__).resolve().parent.parent / "examples" / "scripts"
 def demo_connections() -> list[Connection]:
     return [Connection(name="demo_kdb", kind="kdb", host="demo", port=0,
                        description="In-memory mock: quote, orders, fills"),
-            Connection(name="demo_bbg", kind="bloomberg", url="demo",
+            Connection(name="demo_bbg", kind="bloomberg", host="demo",
                        description="In-process fake Bloomberg (limits are ±10% of base price)")]
 
 

@@ -10,7 +10,7 @@ need, and finally how to keep it running and healthy.
 - [3. Install](#3-install)
 - [4. Try it on one machine](#4-try-it-on-one-machine)
 - [5. Configure](#5-configure)
-- [6. Bloomberg through BbgRelay](#6-bloomberg-through-bbgrelay)
+- [6. Bloomberg through B-PIPE](#6-bloomberg-through-b-pipe)
 - [7. Start each part for real](#7-start-each-part-for-real)
 - [8. Inside Bifrost: connections, scripts, email](#8-inside-bifrost-connections-scripts-email)
 - [9. Your first alert](#9-your-first-alert)
@@ -26,9 +26,9 @@ need, and finally how to keep it running and healthy.
 ## 1. What runs where
 
 ```
- Your desk                     Server (always on)                      Bloomberg machine
- ─────────                     ──────────────────                      ─────────────────
- Bifrost  ──── HTTP ────►  Huginn  (API + engine)  ──── WebSocket ───►  BbgRelay server ─► Terminal
+ Your desk                     Server (always on)                      Bloomberg
+ ─────────                     ──────────────────                      ─────────
+ Bifrost  ──── HTTP ────►  Huginn  (API + engine)  ── blpapi, TCP host:port ──►  B-PIPE
  (browser)                   │   ▲         │
                              │   │ pipe    └──── IPC ────►  KDB servers
                              ▼   │
@@ -38,11 +38,10 @@ need, and finally how to keep it running and healthy.
 
 | Part | What it is | Where it should run |
 |---|---|---|
-| **Huginn** | The service: HTTP API plus the engine that runs alerts and sends email. The only process that opens the database. | A machine that is always on and can reach the KDB servers, the BbgRelay server, the SMTP server, and the folder where your scripts live. |
+| **Huginn** | The service: HTTP API plus the engine that runs alerts and sends email. The only process that opens the database. | A machine that is always on and can reach the KDB servers, B-PIPE, the SMTP server, and the folder where your scripts live. |
 | **Muninn** | A SQLite file owned by Huginn (`data/heimdall.db` by default). Not a process. | Beside Huginn, on a local disk (not a network share). |
 | **Sleipnir** | The scheduler. Talks only to Huginn's API, through a local pipe when they share a machine (no HTTP, no network, nothing a proxy can block). | The same machine as Huginn. On another machine it falls back to HTTP. |
 | **Bifrost** | The Streamlit app. Talks only to Huginn's API. | Anywhere that can reach Huginn: the server, or each person's desk. |
-| **BbgRelay server** | Your existing relay that puts the Bloomberg API on the network. | The machine with the Bloomberg Terminal. |
 
 Scripts registered in Heimdall run **on Huginn's machine**, and KDB and
 Bloomberg are reached **from Huginn's machine**. A test run in the Builder
@@ -52,18 +51,17 @@ also runs there, so what you see while building is what the service will see.
 
 - **Python 3.10 or newer** on every machine that runs a part of Heimdall (3.12
   is what Heimdall is developed on; the full test suite also passes on 3.10.6).
-  The BbgRelay *server* needs 3.11 or newer, but it runs on the Bloomberg
-  machine with its own Python.
 - **Git**, to clone the repository.
 - **Network access** from the Huginn machine to:
   - every KDB server you will query (host and port, no authentication, as in
     KdbMonitor);
-  - the BbgRelay server, if you use Bloomberg steps;
+  - the B-PIPE host and port, if you use Bloomberg steps;
   - your SMTP server, if alerts send email.
 - **pykx** for real KDB access. It is installed with the `kdb` extra below;
   the same version KdbMonitor uses works here.
-- For Bloomberg: the **BbgRelay** checkout (the client is installed into
-  Heimdall's environment; the server runs on the Bloomberg machine).
+- For Bloomberg: **blpapi**, Bloomberg's Python library, installed with the
+  `bloomberg` extra below, and an application name that your B-PIPE
+  authorises.
 
 ## 3. Install
 
@@ -76,23 +74,14 @@ python -m venv .venv
 .venv\Scripts\pip install -e ".[dev,kdb]"
 ```
 
-For Bloomberg steps, install the BbgRelay client into the same environment,
-from its own checkout:
+For Bloomberg steps, add the `bloomberg` extra. It installs `blpapi`, which
+comes from Bloomberg's own package index:
 
 ```powershell
-.venv\Scripts\pip install -e C:\path\to\BbgRelay
+.venv\Scripts\pip install -e ".[dev,kdb,bloomberg]" --extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple/
 ```
 
-Only the client is needed on the Huginn machine. It has no blpapi dependency
-and needs no Bloomberg licence.
-
-On **Python 3.10**, pip refuses BbgRelay because its package asks for 3.11 (only
-its server needs it; the client works on 3.10, and Heimdall's end-to-end tests
-use it there). Install it with:
-
-```powershell
-.venv\Scripts\pip install --ignore-requires-python -e C:\path\to\BbgRelay
-```
+Behind the company proxy, pip may also need `--proxy http://host:port`.
 
 > Always use `.venv\Scripts\python`. A bare `python` may be another project's
 > environment, and Heimdall's dependencies would land in the wrong place.
@@ -183,41 +172,29 @@ A request without the right `X-Heimdall-Token` header is refused (`/health`
 stays open, so monitoring can check it). Huginn logs a warning if it starts on
 a network address with no token.
 
-**Secrets are never stored in the database or the config file**, only the
-names of the environment variables that hold them: the API token, the SMTP
-password, BbgRelay tokens.
+**The token is never stored in the database or the config file**, only the
+name of the environment variable that holds it.
 
-## 6. Bloomberg through BbgRelay
+## 6. Bloomberg through B-PIPE
 
-Heimdall never talks to blpapi itself. It uses your BbgRelay client to reach a
-BbgRelay server running beside a Bloomberg Terminal.
+Huginn talks to Bloomberg B-PIPE directly with `blpapi`. Nothing else needs to
+run, on Huginn's machine or elsewhere.
 
-**On the Bloomberg machine** (as in BbgRelay's own README):
+1. **Install blpapi** into Heimdall's `.venv` on the Huginn machine, with the
+   `bloomberg` extra (section 3).
+2. **Check the network.** The Huginn machine must reach the B-PIPE host and
+   port (8194 by default). `Test-NetConnection bpipe-host -Port 8194` should
+   show `TcpTestSucceeded : True`.
+3. **Add the connection** in Bifrost, Settings → Connections (section 8): kind
+   *Bloomberg B-PIPE*, the B-PIPE host and port, and the application name that
+   B-PIPE authorises Heimdall as (application-only authentication). Your
+   Bloomberg or market-data team gives you the host, port and application name.
+4. Press **Test** before saving. It should say the session started at
+   host:port as the application, and that the reference (`//blp/refdata`) and
+   market data (`//blp/mktdata`) services are open.
 
-```powershell
-cd C:\path\to\BbgRelay
-pip install -e ".[server]"
-pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/simple/ blpapi
-python scripts\smoke_terminal.py           # talks straight to blpapi: fix the Terminal first if this fails
-
-copy config.example.toml relay.toml        # set host to an address Huginn can reach
-setx BBGRELAY_TOKEN "another-long-random-string"
-python -m bbgrelay_server -c relay.toml
-```
-
-**On the Huginn machine**, put the same token in an environment variable for
-the account that runs Huginn:
-
-```powershell
-setx BBGRELAY_TOKEN "another-long-random-string"
-```
-
-Then add the connection in Bifrost (section 8) with the URL
-`ws://bloomberg-host:8484` and *Token environment variable* `BBGRELAY_TOKEN`.
-
-To develop without a Terminal, run the relay's fake backend instead
-(`python -m bbgrelay_server --fake --port 8484`), or use a Bloomberg connection
-whose URL is `demo`.
+To develop without B-PIPE, use a Bloomberg connection whose host is `demo`: the
+built-in fake Bloomberg.
 
 ## 7. Start each part for real
 
@@ -255,12 +232,23 @@ Everything below is done in **Settings**, and is stored in Muninn.
 
 | Kind | Fill in | Notes |
 |---|---|---|
-| KDB | name, host, port | Host `demo` is the built-in mock. Use the address as **Huginn's machine** sees it. |
-| Bloomberg | name, BbgRelay URL (`ws://host:8484`), token environment variable | URL `demo` is the built-in fake. |
+| KDB | name, KDB host, KDB port, description | Host `demo` is the built-in mock. Use the address as **Huginn's machine** sees it. |
+| Bloomberg B-PIPE | name, B-PIPE host, B-PIPE port (default 8194), application name, description | Host `demo` is the built-in fake. The application name is the one B-PIPE authorises Heimdall as. |
 
-Select a connection and press **Test**. For KDB it lists the tables (the same
-`tables[]` the Builder uses for its table picker); for Bloomberg it pings the
-relay. A connection that an alert uses cannot be deleted.
+The *Connection* chooser picks **New connection** or **Edit** an existing one.
+A new connection first asks for its kind, and only that kind's fields are shown.
+
+**Test** tries the values as typed, from Huginn's machine, before anything is
+saved. For KDB it lists the tables (the same `tables[]` the Builder uses for its
+table picker); for B-PIPE it starts a session and opens the reference and
+market data services. Then **Save**, or **Delete** an existing connection. A
+connection that an alert uses cannot be deleted. In the API, `POST
+/connections/test` tests a connection sent in the body, and `POST
+/connections/{name}/test` a saved one.
+
+Bloomberg connections saved by an older Heimdall still load. One whose URL was
+`demo` becomes host `demo`; any other needs its B-PIPE host, port and
+application name filled in.
 
 ### Scripts
 
@@ -289,11 +277,11 @@ copy from.
 
 | Field | Example |
 |---|---|
-| SMTP server, port | `smtp.company.com`, `25` (or `587` with STARTTLS) |
-| From | `heimdall@company.com` |
-| User | only if the server needs a login |
-| Password environment variable | e.g. `HEIMDALL_SMTP_PASSWORD`, set on Huginn's machine |
-| STARTTLS | if the server requires it |
+| SMTP server | `smtp.company.com` |
+| SMTP port | `25` |
+| Sender address | `heimdall@company.com` |
+
+Mail goes through the company relay without a login or TLS, as in KdbMonitor.
 
 In the Builder's **Notify** section, **Send a test notification** sends a test
 email through these settings, so you can check them immediately.
@@ -309,7 +297,10 @@ In **Builder**:
    - *Bloomberg*: one security per line, e.g. `{{orders.sym}} JP Equity`
      (repeated for each value, and the result keeps `sym` beside `security` so
      you can join back), plus fields such as `LIMIT_UP`, `LIMIT_DOWN`,
-     `PX_LAST`.
+     `PX_LAST`. `bdp` asks for reference and current values; `snap` subscribes
+     briefly to live data, keeps the first value of each field (waiting up to
+     about 10 seconds), then unsubscribes. Its default fields are `LAST_PRICE`,
+     `BID` and `ASK`.
    - *Script*: pick a registered script and fill its parameters.
    - *Compute*: join two earlier steps, add columns
      (`abs(last - LIMIT_UP) / LIMIT_UP * 100`), keep rows where a test holds
@@ -328,7 +319,8 @@ In **Builder**:
    are listed beside it.
 
 Alerts can be exported (Alerts → select → Export, or Settings → Import /
-export) and imported elsewhere. Imported alerts arrive switched off.
+export) and imported elsewhere (section 13). Imported alerts arrive switched
+off.
 
 ## 10. Schedules
 
@@ -369,8 +361,8 @@ stops, and the loop starts them all again 30 seconds later. Logs go to
 > running. Both were checked on Windows 11.
 
 In an **administrator** PowerShell, with the path adjusted. The task runs as
-the account that has the environment variables (token, SMTP password, relay
-token), whether or not anyone is logged on:
+the account that has the environment variables (the API token), whether or not
+anyone is logged on:
 
 ```powershell
 $h = "C:\heimdall"   # where you cloned it; spaces in the path are fine (not an apostrophe)
@@ -443,10 +435,23 @@ mkdir backup -Force
 .venv\Scripts\python -c "import sqlite3; s=sqlite3.connect('data/heimdall.db'); d=sqlite3.connect('backup/heimdall.db'); s.backup(d)"
 ```
 
-**Move alerts to another install.** Settings → Import / export downloads
-every alert with its schedules, connections and scripts as one JSON file.
-Importing it elsewhere skips what already exists unless *Replace* is ticked,
-and imported alerts arrive switched off.
+**Move alerts to another install.** Settings → Import / export. **Export**:
+pick Everything, Connections, Alerts, Schedules or Scripts, and download
+`heimdall-<choice>.json`. **Import**: choose what to take from the file
+(Connections, Alerts, Schedules, Scripts; all by default), tick *Replace what
+has the same name* if wanted, and upload the file. Bifrost shows what the file
+holds, then **Import**.
+
+- Without *Replace*, what already exists is skipped.
+- Imported alerts arrive switched off.
+- A schedule attaches to the alert with the same name, imported in the same
+  file or already in Heimdall. A schedule whose alert is not there is skipped
+  and reported. An identical schedule (same action, cron and time zone) is not
+  added twice. With *Replace*, the file's schedules replace that alert's
+  existing ones.
+
+The API does the same: `GET /export?parts=connections,alerts` and
+`POST /import?parts=schedules&replace=true` (parts default to all).
 
 **Start empty.** Stop Huginn, move `data\heimdall.db` aside, start Huginn
 (without `--demo`).
@@ -455,7 +460,7 @@ and imported alerts arrive switched off.
 
 ```powershell
 git pull
-.venv\Scripts\pip install -e ".[dev,kdb]"
+.venv\Scripts\pip install -e ".[dev,kdb,bloomberg]" --extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple/
 .venv\Scripts\python -m pytest -m "not e2e"     # quick check
 ```
 
@@ -470,21 +475,12 @@ if missing, so a newer Heimdall opens an older database.
 .venv\Scripts\python -m pytest -m e2e          # end to end only
 ```
 
-The end-to-end tests start the real Huginn, Sleipnir and Bifrost, BbgRelay's
-fake server (so the BbgRelay checkout must be installed), and a local SMTP
-server. They then take an alert through every step kind, email delivery,
-error and recovery emails, a cron schedule, cleanup and a restart. They use
-their own temporary database and free ports, so they never touch your real
-data.
-
-On Python 3.10 the BbgRelay server they start cannot run (it needs 3.11+).
-Point `HEIMDALL_E2E_RELAY_PYTHON` at a 3.11+ `python.exe` that has BbgRelay
-installed, and the tests start the relay with it:
-
-```powershell
-$env:HEIMDALL_E2E_RELAY_PYTHON = "C:\path\to\BbgRelay\.venv\Scripts\python.exe"
-.venv\Scripts\python -m pytest
-```
+The end-to-end tests start the real Huginn, Sleipnir and Bifrost and a local
+SMTP server, and use the built-in fake Bloomberg (host `demo`), so they need
+nothing extra. They then take an alert through every step kind, email
+delivery, error and recovery emails, a cron schedule, cleanup and a restart.
+They use their own temporary database and free ports, so they never touch your
+real data.
 
 On a running system:
 
@@ -501,8 +497,9 @@ On a running system:
 | **missing or wrong X-Heimdall-Token** | The token variable differs between machines, or was set with `setx` and the shell was not reopened. |
 | Sidebar shows **Sleipnir not seen** | Sleipnir is not running or cannot reach Huginn; read `data\logs\sleipnir.log`. Schedules will not happen until it runs. It reaches a Huginn on the same machine through the pipe `\\.\pipe\heimdall-huginn-<port>`, so both must use the same `[huginn] port` and run as the same Windows account (the pipe's key is in that account's temp folder). |
 | KDB **Test** fails | Huginn's machine cannot reach host:port, or pykx is missing from the environment (`pip install -e ".[kdb]"`). The same host and port work in KdbMonitor. |
-| Bloomberg step: **BbgRelay client is not installed** | `pip install -e C:\path\to\BbgRelay` into Heimdall's `.venv` on the Huginn machine. |
-| Bloomberg step times out or is refused | The relay is down, the URL is wrong, or the token variable on the Huginn machine does not match the relay's. Run BbgRelay's smoke test on the Bloomberg machine. |
+| Bloomberg step: **blpapi is not installed** | Install it into Heimdall's `.venv` on the Huginn machine: `.venv\Scripts\pip install -e ".[bloomberg]" --extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple/` (add `--proxy http://host:port` behind the company proxy). |
+| B-PIPE **Test** fails: **could not start a session** | Huginn's machine cannot reach the B-PIPE host:port, or the port is wrong. Check with `Test-NetConnection bpipe-host -Port 8194`. |
+| **would not open //blp/refdata or //blp/mktdata for '&lt;app&gt;'** | The application name is not entitled or authorised on that B-PIPE. Ask the Bloomberg or market-data team. |
 | Script step: **cannot start … not found** | Use full paths for the interpreter and the script in the registered command. |
 | Script step: **did not print valid JSON** | The script printed something else besides its output (a log line, a warning). Send logs to stderr, or register it as `csv` or `value`. |
 | No email arrives | Settings → Email, then Builder → Notify → **Send a test notification**; the error is shown, and each run's deliveries are listed in its History detail. |

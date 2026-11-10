@@ -2,7 +2,7 @@
 ``HEIMDALL_*`` environment variables on top.
 
 Secrets are never written in the file — only the *names* of the environment
-variables that hold them (the API token, the SMTP password, relay tokens).
+variables that hold them (the API token, the SMTP password).
 """
 from __future__ import annotations
 

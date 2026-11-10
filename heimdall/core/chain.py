@@ -10,7 +10,7 @@ from typing import Callable, Optional, Protocol
 import pandas as pd
 
 from heimdall.core import compute, refs, scripts
-from heimdall.core.bloomberg import BloombergSource, FakeBloomberg, RelaySource
+from heimdall.core.bloomberg import BloombergSource, BpipeSource, FakeBloomberg
 from heimdall.core.kdb import KdbClient, MockKdbClient, PyKxClient, build_q
 from heimdall.core.models import (Alert, BloombergStep, ComputeStep, Connection, KdbStep,
                                   Script, ScriptStep)
@@ -260,11 +260,11 @@ class Pool:
     def __init__(self, connections: Callable[[str], Optional[Connection]],
                  scripts_: Callable[[str], Optional[Script]],
                  kdb_factory: Callable[[str, int], KdbClient] = PyKxClient,
-                 relay_factory: Callable[[Connection], BloombergSource] | None = None):
+                 bpipe_factory: Callable[[Connection], BloombergSource] | None = None):
         self._connections = connections
         self._scripts = scripts_
         self._kdb_factory = kdb_factory
-        self._relay_factory = relay_factory or (lambda c: RelaySource(c.url, c.token_env))
+        self._bpipe_factory = bpipe_factory or (lambda c: BpipeSource(c.host, c.port, c.app_name))
         self._cache: dict[str, tuple[tuple, object]] = {}
         self._lock = threading.Lock()
 
@@ -283,7 +283,10 @@ class Pool:
                 return hit[1]
         client = make()
         with self._lock:
+            old = self._cache.get(name)
             self._cache[name] = (key, client)
+        if old and old[1] is not client:
+            _close(old[1])          # e.g. a B-PIPE session to an address that was edited away
         return client
 
     def kdb(self, name: str) -> KdbClient:
@@ -294,9 +297,9 @@ class Pool:
 
     def bloomberg(self, name: str) -> BloombergSource:
         c = self._conn(name, "bloomberg")
-        if c.url.strip().lower() == "demo":
+        if c.host.strip().lower() == "demo":
             return self._cached(name, ("demo",), FakeBloomberg)
-        return self._cached(name, (c.url, c.token_env), lambda: self._relay_factory(c))
+        return self._cached(name, (c.host, c.port, c.app_name), lambda: self._bpipe_factory(c))
 
     def script(self, name: str) -> Script:
         s = self._scripts(name)
@@ -304,9 +307,26 @@ class Pool:
             raise LookupError(f"no registered script called '{name}'")
         return s
 
+    def for_one(self, conn: Connection) -> "Pool":
+        """A separate pool that knows only ``conn`` (e.g. one not saved yet), made
+        with the same client factories as this one."""
+        return Pool(lambda name: conn if name == conn.name else None, self._scripts,
+                    kdb_factory=self._kdb_factory, bpipe_factory=self._bpipe_factory)
+
     def forget(self, name: str) -> None:
         with self._lock:
-            self._cache.pop(name, None)
+            hit = self._cache.pop(name, None)
+        if hit:
+            _close(hit[1])
+
+
+def _close(client: object) -> None:
+    close = getattr(client, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - closing a client that is already broken
+            pass
 
 
 def frame_to_records(df: Optional[pd.DataFrame], limit: int) -> dict:

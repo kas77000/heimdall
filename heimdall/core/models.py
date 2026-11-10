@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -30,16 +30,26 @@ class Connection(BaseModel):
     """A place a step can get data from.
 
     ``kdb``: host + port (host ``demo`` is the in-memory mock).
-    ``bloomberg``: a BbgRelay URL (``demo`` is the in-process fake) and the name
-    of the environment variable holding its token — never the token itself.
+    ``bloomberg``: a B-PIPE host + port and the application name B-PIPE knows
+    Heimdall by (host ``demo`` is the in-process fake).
     """
     name: str
     kind: Literal["kdb", "bloomberg"] = "kdb"
     host: str = ""
     port: int = 0
-    url: str = ""
-    token_env: str = ""
+    app_name: str = ""
     description: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_bbgrelay(cls, data):
+        # Connections saved when Bloomberg went through BbgRelay had a ``url``
+        # (and ``token_env``). Those fields are ignored now; the demo fake's
+        # ``url = "demo"`` becomes ``host = "demo"`` so it keeps working.
+        if isinstance(data, dict) and str(data.get("url", "")).strip().lower() == "demo" \
+                and not data.get("host"):
+            data = {**data, "host": "demo"}
+        return data
 
     @field_validator("name")
     @classmethod

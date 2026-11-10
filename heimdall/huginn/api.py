@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from heimdall import __version__
 from heimdall.config import Config
 from heimdall.core import cron
-from heimdall.core.chain import validate as validate_alert
+from heimdall.core.chain import Pool, validate as validate_alert
 from heimdall.core.conditions import describe
 from heimdall.core.kdb import list_columns, list_tables
 from heimdall.core.models import Alert, Connection, Schedule, Script
@@ -20,6 +20,7 @@ from heimdall.huginn.engine import Engine
 from heimdall.muninn.store import Conflict, Muninn, NotFound, parse_iso, utcnow
 
 BUNDLE_VERSION = 1
+BUNDLE_PARTS = ("connections", "scripts", "alerts", "schedules")
 
 
 class PurgeRequest(BaseModel):
@@ -143,21 +144,37 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         store.log_event(who, "connection deleted", detail=name)
         return {"deleted": name}
 
+    def _try(conn: Connection, pool: Pool) -> dict:
+        try:
+            if conn.kind == "kdb":
+                tables = list_tables(pool.kdb(conn.name))
+                return {"ok": True, "detail": f"{len(tables)} table(s)", "tables": tables}
+            src = pool.bloomberg(conn.name)
+            pong = src.ping() if hasattr(src, "ping") else {"pong": True}
+            if pong.get("fake"):
+                return {"ok": True, "detail": "built-in fake Bloomberg"}
+            return {"ok": bool(pong.get("pong", True)),
+                    "detail": f"B-PIPE session started at {pong.get('server')} as '{pong.get('app')}'; "
+                              "reference and market data services are open"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "detail": str(exc)}
+
+    @app.post("/connections/test", dependencies=secured)
+    def test_unsaved_connection(conn: Connection):
+        """Tries a connection as typed, before it is saved, then lets it go."""
+        pool = engine.pool.for_one(conn)
+        try:
+            return _try(conn, pool)
+        finally:
+            pool.forget(conn.name)
+
     @app.post("/connections/{name}/test", dependencies=secured)
     def test_connection(name: str):
         conn = store.connection(name)
         if conn is None:
             raise NotFound(f"no connection called '{name}'")
         engine.pool.forget(name)
-        try:
-            if conn.kind == "kdb":
-                tables = list_tables(engine.pool.kdb(name))
-                return {"ok": True, "detail": f"{len(tables)} table(s)", "tables": tables}
-            src = engine.pool.bloomberg(name)
-            pong = src.ping() if hasattr(src, "ping") else {"pong": True}
-            return {"ok": bool(pong.get("pong", True)), "detail": str(pong)}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "detail": str(exc)}
+        return _try(conn, engine.pool)
 
     @app.get("/connections/{name}/tables", dependencies=secured)
     def tables(name: str):
@@ -413,9 +430,20 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
 
     # -- export / import -----------------------------------------------------
 
+    def _parts(parts: Optional[str]) -> set[str]:
+        chosen = {p.strip() for p in (parts or "").split(",") if p.strip()} or set(BUNDLE_PARTS)
+        unknown = chosen - set(BUNDLE_PARTS)
+        if unknown:
+            raise HTTPException(422, f"unknown part(s): {', '.join(sorted(unknown))}; "
+                                     f"choose from {', '.join(BUNDLE_PARTS)}")
+        return chosen
+
     @app.get("/export", dependencies=secured)
     def export(alert_ids: Optional[str] = None, include_connections: bool = True,
-               include_scripts: bool = True):
+               include_scripts: bool = True, parts: Optional[str] = None):
+        """``parts`` picks what goes in (connections, scripts, alerts, schedules;
+        all by default). ``alert_ids`` narrows it to some alerts and what they use."""
+        chosen = _parts(parts)
         wanted = {int(x) for x in alert_ids.split(",")} if alert_ids else None
         alerts = [a for a in store.alerts() if wanted is None or a.id in wanted]
         names = {a.id: a.name for a in alerts}
@@ -424,14 +452,24 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         used_conns = {getattr(s, "connection", "") for a in alerts for s in a.steps}
         used_scripts = {getattr(s, "script", "") for a in alerts for s in a.steps}
         b = Bundle(
-            connections=[c for c in store.connections() if include_connections and (wanted is None or c.name in used_conns)],
-            scripts=[s for s in store.scripts() if include_scripts and (wanted is None or s.name in used_scripts)],
-            alerts=[a.model_copy(update={"id": None, "enabled": False}) for a in alerts],
-            schedules=schedules)
+            connections=[c for c in store.connections() if include_connections and "connections" in chosen
+                         and (wanted is None or c.name in used_conns)],
+            scripts=[s for s in store.scripts() if include_scripts and "scripts" in chosen
+                     and (wanted is None or s.name in used_scripts)],
+            alerts=[a.model_copy(update={"id": None, "enabled": False}) for a in alerts] if "alerts" in chosen else [],
+            schedules=schedules if "schedules" in chosen else [])
         return b.model_dump()
 
     @app.post("/import", dependencies=secured)
-    def import_bundle(bundle: Bundle, replace: bool = False, who: str = Depends(actor)):
+    def import_bundle(bundle: Bundle, replace: bool = False, parts: Optional[str] = None,
+                      who: str = Depends(actor)):
+        """Brings in the chosen ``parts`` of a bundle (all by default). Schedules
+        attach to the alert of the same name: one imported now, or one already here."""
+        chosen = _parts(parts)
+        bundle = Bundle(connections=bundle.connections if "connections" in chosen else [],
+                        scripts=bundle.scripts if "scripts" in chosen else [],
+                        alerts=bundle.alerts if "alerts" in chosen else [],
+                        schedules=bundle.schedules if "schedules" in chosen else [])
         report = {"connections": [], "scripts": [], "alerts": [], "schedules": 0, "skipped": []}
         for c in bundle.connections:
             if store.connection(c.name) and not replace:
@@ -459,20 +497,39 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
             saved = store.save_alert(a)
             ids[saved.name] = saved.id
             report["alerts"].append(saved.name)
+        cleared: set[int] = set()
         for raw in bundle.schedules:
             name = raw.get("alert")
-            if name not in ids:
+            if name in ids:
+                alert_id = ids[name]
+            elif (here := store.alert_by_name(name or "")) is not None:
+                alert_id = here.id
+                if bundle.alerts and any(a.name == name for a in bundle.alerts):
+                    # its alert was in the file but skipped as already here: so are its schedules
+                    report["skipped"].append(f"schedule for {name} (its alert was skipped)")
+                    continue
+                if replace and alert_id not in cleared:     # the file's schedules replace this alert's
+                    for old in store.schedules(alert_id):
+                        store.delete_schedule(old.id)
+                    cleared.add(alert_id)
+            else:
+                report["skipped"].append(f"schedule for {name} (no alert called that here)")
                 continue
             body = {k: v for k, v in raw.items() if k != "alert"}
-            s = Schedule(**body, alert_id=ids[name])
+            s = Schedule(**body, alert_id=alert_id)
             try:
                 cron.validate(s.cron, s.tz)
             except cron.CronError:
                 report["skipped"].append(f"schedule for {name} ({s.cron})")
                 continue
+            if any((o.action, o.cron, o.tz) == (s.action, s.cron, s.tz) for o in store.schedules(alert_id)):
+                report["skipped"].append(f"schedule for {name} ({s.action} at {s.cron}, already here)")
+                continue
             store.save_schedule(s)
             report["schedules"] += 1
-        store.log_event(who, "imported", detail=f"{len(report['alerts'])} alert(s)")
+        store.log_event(who, "imported", detail=f"{len(report['alerts'])} alert(s), "
+                        f"{len(report['connections'])} connection(s), {len(report['scripts'])} script(s), "
+                        f"{report['schedules']} schedule(s)")
         return report
 
     return app
