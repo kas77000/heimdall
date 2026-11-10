@@ -112,7 +112,9 @@ subscripts and lambdas are refused at save time.
   count) compared to a value.
 * **Re-arm policy** decides whether a triggered run notifies: every run, only
   on the transition into triggered, after a cooldown, or only when the result
-  differs from the last triggered one (order-insensitive fingerprint).
+  differs from the last triggered one (order-insensitive fingerprint), or only
+  when a measure (row count or a column total, whole table or per key) moved by
+  an amount or percent since the last notification (`alert_state.delta_ref`).
 * **Channel**: email (SMTP, HTML with the first rows of the result).
   Optionally notify on error after N consecutive
   errors, and on recovery. Every attempt is recorded with its outcome.

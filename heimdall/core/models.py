@@ -198,8 +198,30 @@ class Condition(BaseModel):
 
 
 class Rearm(BaseModel):
-    mode: Literal["every_run", "transition", "cooldown", "on_change"] = "transition"
+    """Whether a run that fires notifies.
+
+    ``delta``: the first firing notifies; while it keeps firing, it notifies
+    again only when a measure moved by at least ``delta_amount`` (in units, or
+    percent) from its value at the last notification. The measure is the row
+    count or a total of a column, for the whole table or per ``delta_key``.
+    """
+    mode: Literal["every_run", "transition", "cooldown", "on_change", "delta",
+                  "rows_change"] = "transition"
     cooldown_secs: int = 900
+    delta_measure: Literal["rows", "value"] = "value"
+    delta_column: str = ""
+    delta_agg: Literal["max", "min", "avg", "sum"] = "max"
+    delta_key: str = ""              # empty = one value for the whole table
+    delta_amount: float = 1.0
+    delta_unit: Literal["abs", "pct"] = "abs"
+    delta_direction: Literal["either", "up", "down"] = "either"
+
+    def effective(self) -> "Rearm":
+        """``rows_change`` is a ``delta`` on the row count: any row more or fewer notifies."""
+        if self.mode != "rows_change":
+            return self
+        return self.model_copy(update=dict(mode="delta", delta_measure="rows", delta_key="",
+                                           delta_amount=1.0, delta_unit="abs", delta_direction="either"))
 
 
 ALL_CLEAR_INTERVALS = {"15 minutes": 900, "30 minutes": 1800, "1 hour": 3600, "2 hours": 7200,

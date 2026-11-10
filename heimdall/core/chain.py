@@ -231,6 +231,12 @@ def validate(alert: Alert, connections: dict[str, Connection], scripts_by_name: 
         problems.append(f"The condition judges step '{target}', which does not exist.")
     if alert.condition.type in ("any_row", "all_rows", "aggregate") and not alert.condition.column:
         problems.append("The condition needs a column.")
+    r = alert.rearm
+    if r.mode == "delta":
+        if r.delta_measure == "value" and not r.delta_column.strip():
+            problems.append("Re-notify on a move needs the column to watch.")
+        if not r.delta_amount > 0:
+            problems.append("Re-notify on a move needs an amount above zero.")
     problems += hours.problems(alert.active_hours)
     return problems
 

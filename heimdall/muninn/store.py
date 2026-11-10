@@ -99,6 +99,7 @@ STATE_COLUMNS = {
     "clear_since": "TEXT",                          # the all-clear period started
     "clear_checks": "INTEGER NOT NULL DEFAULT 0",   # clean checks in that period
     "clear_dirty": "INTEGER NOT NULL DEFAULT 0",    # a check fired or failed in that period
+    "delta_ref": "TEXT",                            # JSON: the delta measure at the last notification
 }
 
 
@@ -291,7 +292,7 @@ class Muninn:
                                   "last_status": None, "last_message": None, "last_triggered": 0,
                                   "last_notified_at": None, "last_triggered_hash": "",
                                   "consecutive_errors": 0, "off_hours": 0, "clear_since": None,
-                                  "clear_checks": 0, "clear_dirty": 0}
+                                  "clear_checks": 0, "clear_dirty": 0, "delta_ref": None}
 
     def update_state(self, alert_id: int, **values: Any) -> None:
         """Set some of an alert's state columns, keeping the rest."""

@@ -16,9 +16,9 @@ from pydantic import ValidationError
 
 from heimdall.bifrost import common as c
 from heimdall.core import cron, hours
-from heimdall.core.conditions import describe
+from heimdall.core.conditions import describe, describe_delta
 from heimdall.core.kdb import build_q
-from heimdall.core.models import ALL_CLEAR_INTERVALS, ActiveHours, Alert, Condition, KdbStep
+from heimdall.core.models import ALL_CLEAR_INTERVALS, ActiveHours, Alert, Condition, KdbStep, Rearm
 from heimdall.core.notify import ALL_CLEAR_FIELDS
 
 DRAFT, REV, LOADED, PREVIEW = "builder_draft", "builder_rev", "builder_loaded", "builder_preview"
@@ -34,7 +34,10 @@ CONDITIONS = {"has_rows": "Returns any rows", "no_rows": "Returns no rows",
               "row_count": "Number of rows is…", "any_row": "Any row where…",
               "all_rows": "Every row where…", "aggregate": "A total (max, sum…) is…"}
 REARM = {"transition": "When it starts firing", "on_change": "When the result changes",
-         "cooldown": "At most every…", "every_run": "Every run while it fires"}
+         "rows_change": "When rows are added or removed",
+         "delta": "When a value moves by…", "cooldown": "At most every…",
+         "every_run": "Every run while it fires"}
+DELTA_DIRECTIONS = {"either": "Moves by", "up": "Rises by", "down": "Falls by"}
 NO_GROUP, NEW_GROUP = "(no group)", "➕ New group…"
 ZONES = ["Europe/London", "Europe/Paris", "America/New_York", "Asia/Tokyo", "Asia/Hong_Kong",
          "Asia/Singapore", "Australia/Sydney", "UTC"]
@@ -558,12 +561,58 @@ def _trigger(d: dict) -> None:
         mins = b.number_input("Minutes between notifications", min_value=1,
                               key=c.seed(K("r_cd"), max(1, rearm.get("cooldown_secs", 900) // 60)))
         rearm["cooldown_secs"] = int(mins) * 60
+    if rearm["mode"] == "delta":
+        _delta(rearm, cond, cols)
+        return
     st.caption({
         "transition": "One notification when the condition becomes true; nothing more until it clears and fires again.",
         "on_change": "A notification whenever the rows it fires on are different from the last time it fired.",
+        "rows_change": "One notification when it starts firing, then another each time the result has more "
+                       "or fewer rows than at the last notification. Once it clears, the next firing starts over.",
         "cooldown": "Notifies again while it keeps firing, but not more often than this.",
         "every_run": "Every check that fires sends a notification.",
     }[rearm["mode"]])
+
+
+def _delta(rearm: dict, cond: dict, cols: list[str]) -> None:
+    """Fire again while still firing, when a value moved enough since the last notification."""
+    r = st.columns([1.2, 1, 1.4, 1.4])
+    rearm["delta_measure"] = r[0].selectbox(
+        "Watch", ["value", "rows"], format_func={"value": "A column", "rows": "Number of rows"}.get,
+        key=c.seed(K("d_meas"), rearm.get("delta_measure", "value")))
+    if rearm["delta_measure"] == "value":
+        agg = rearm.get("delta_agg") or (cond.get("agg") if cond.get("agg") in ("max", "min", "avg", "sum") else "max")
+        rearm["delta_agg"] = r[1].selectbox("Taking its", ["max", "min", "avg", "sum"],
+                                            key=c.seed(K("d_agg"), agg),
+                                            help="With a key, per key; for one row, any of them is that row's value")
+        default = rearm.get("delta_column") or cond.get("column", "")
+        if cols:
+            rearm["delta_column"] = r[2].selectbox("Column", cols, key=c.seed(
+                K("d_col"), default if default in cols else cols[0]))
+        else:
+            rearm["delta_column"] = r[2].text_input("Column", key=c.seed(K("d_col_t"), default),
+                                                    help="Run a test to pick from the real columns")
+    key_opts = [""] + [x for x in cols if x != rearm.get("delta_column")]
+    if rearm.get("delta_key") and rearm["delta_key"] not in key_opts:
+        key_opts.append(rearm["delta_key"])
+    rearm["delta_key"] = r[3].selectbox(
+        "Per", key_opts, format_func=lambda x: x or "Whole table",
+        key=c.seed(K("d_key"), rearm.get("delta_key", "")),
+        help="Compare each value of this column separately, e.g. per sym. A new one also notifies.")
+    r = st.columns([1.2, 1, 1.4, 1.4])
+    rearm["delta_direction"] = r[0].selectbox("Direction", list(DELTA_DIRECTIONS), format_func=DELTA_DIRECTIONS.get,
+                                              key=c.seed(K("d_dir"), rearm.get("delta_direction", "either")))
+    rearm["delta_amount"] = float(r[1].number_input(
+        "At least", min_value=0.0, step=1.0, format="%g",
+        key=c.seed(K("d_amt"), float(rearm.get("delta_amount", 1.0)))))
+    rearm["delta_unit"] = r[2].selectbox("Unit", ["abs", "pct"],
+                                         format_func={"abs": "In the column's units", "pct": "Percent"}.get,
+                                         key=c.seed(K("d_unit"), rearm.get("delta_unit", "abs")))
+    try:
+        st.caption(f"The first firing notifies. {describe_delta(Rearm(**rearm))}; "
+                   "that notification becomes the new reference. Once it clears, the next firing starts over.")
+    except ValidationError:
+        pass
 
 
 def _isnum(text: str) -> bool:

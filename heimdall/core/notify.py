@@ -54,6 +54,8 @@ def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "") -> M
     if kind == "trigger":
         lines.append(conditions.describe(alert.condition, ev.judged_step) + ".")
         lines.append(f"{ev.row_count} row(s) in '{ev.judged_step}'.")
+        if ev.moves:
+            lines.append("Firing again because " + "; ".join(ev.moves) + ".")
     elif kind == "error":
         lines.append(f"The alert failed {alert.channels.error_after} time(s) in a row: {ev.error}")
     else:

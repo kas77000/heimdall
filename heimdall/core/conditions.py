@@ -96,6 +96,79 @@ def describe(cond: Condition, last_step: str = "") -> str:
     return cond.type
 
 
+def measure(rearm: Rearm, df: pd.DataFrame) -> dict[str, float]:
+    """The values a ``delta`` re-arm compares: {key: value}, key "" for the whole table."""
+    if rearm.delta_measure == "value":
+        if not rearm.delta_column:
+            raise ConditionError("re-notify on a move: choose the column to watch")
+        if rearm.delta_column not in df.columns:
+            raise ConditionError(f"re-notify on a move: column '{rearm.delta_column}' is not in the result "
+                                 f"(columns: {', '.join(map(str, df.columns)) or 'none'})")
+        col = pd.to_numeric(df[rearm.delta_column], errors="coerce")
+        if df[rearm.delta_column].notna().any() and col.isna().all():
+            raise ConditionError(f"re-notify on a move: column '{rearm.delta_column}' is not numeric")
+    if rearm.delta_key:
+        if rearm.delta_key not in df.columns:
+            raise ConditionError(f"re-notify on a move: key column '{rearm.delta_key}' is not in the result")
+        keys = df[rearm.delta_key].astype(str)
+        if rearm.delta_measure == "rows":
+            out = keys.value_counts()
+        else:
+            out = col.groupby(keys).agg(_AGG[rearm.delta_agg])
+        return {str(k): float(v) for k, v in out.items() if not pd.isna(v)}
+    if rearm.delta_measure == "rows":
+        return {"": float(len(df))}
+    v = getattr(col, _AGG[rearm.delta_agg])()
+    return {} if pd.isna(v) else {"": float(v)}
+
+
+def _fmt(v: float) -> str:
+    return f"{v:,.6g}"
+
+
+def moves(rearm: Rearm, before: dict[str, float], now: dict[str, float]) -> list[str]:
+    """What moved enough since ``before`` to notify again, one sentence per key.
+
+    A key that was not there before counts as a move. Keys that went away do not.
+    """
+    what = "rows" if rearm.delta_measure == "rows" else f"{rearm.delta_agg} {rearm.delta_column}"
+    out = []
+    for key, v in now.items():
+        name = f"{what} for {key}" if key else what
+        if key not in before:
+            if rearm.delta_key:
+                out.append(f"{name} is new ({_fmt(v)})")
+            continue
+        ref = before[key]
+        diff = v - ref
+        if rearm.delta_unit == "pct":
+            size = abs(diff) / abs(ref) * 100 if ref else (float("inf") if diff else 0.0)
+        else:
+            size = abs(diff)
+        if diff == 0 or size < rearm.delta_amount:
+            continue
+        if (rearm.delta_direction == "up" and diff < 0) or (rearm.delta_direction == "down" and diff > 0):
+            continue
+        if rearm.delta_measure == "rows" and not key:
+            n = abs(int(diff))
+            out.append(f"the result went from {_fmt(ref)} to {_fmt(v)} rows "
+                       f"({n} {'more' if diff > 0 else 'fewer'})")
+            continue
+        pct = f", {diff / abs(ref) * 100:+.2f}%" if ref else ""
+        out.append(f"{name} moved {_fmt(ref)} → {_fmt(v)} ({'+' if diff > 0 else ''}{_fmt(diff)}{pct})")
+    return out
+
+
+def describe_delta(rearm: Rearm) -> str:
+    what = "the number of rows" if rearm.delta_measure == "rows" else \
+        f"the {rearm.delta_agg} of {rearm.delta_column or '…'}"
+    if rearm.delta_key:
+        what += f" for any {rearm.delta_key}"
+    by = f"{_fmt(rearm.delta_amount)}%" if rearm.delta_unit == "pct" else _fmt(rearm.delta_amount)
+    way = {"either": "moves by", "up": "rises by", "down": "falls by"}[rearm.delta_direction]
+    return f"Notifies again while firing when {what} {way} at least {by} since the last notification"
+
+
 def should_notify(prev_triggered: bool, prev_notified_at: Optional[datetime],
                   triggered: bool, rearm: Rearm, now: datetime) -> bool:
     """Whether a triggered run sends notifications, under the alert's re-arm policy.
@@ -105,7 +178,7 @@ def should_notify(prev_triggered: bool, prev_notified_at: Optional[datetime],
     """
     if not triggered:
         return False
-    if rearm.mode in ("every_run", "on_change"):
+    if rearm.mode in ("every_run", "on_change", "delta", "rows_change"):
         return True
     if rearm.mode == "transition":
         return not prev_triggered

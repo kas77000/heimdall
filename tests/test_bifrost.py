@@ -155,6 +155,24 @@ def test_builder_active_hours_and_all_clear_are_saved(wired, store):
     assert saved.group == "Market data"
 
 
+def test_builder_saves_a_renotify_on_move_rule(wired, store):
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Trigger").run()
+    assert not at.exception, at.exception
+    next(r for r in at.radio if r.label == "Notify").set_value("delta").run()
+    assert not at.exception, at.exception
+    at.selectbox(key=next(s.key for s in at.selectbox if s.label == "Watch")).set_value("rows").run()
+    at.selectbox(key=next(s.key for s in at.selectbox if s.label == "Direction")).set_value("up").run()
+    next(n for n in at.number_input if n.label == "At least").set_value(3.0).run()
+    at.selectbox(key=next(s.key for s in at.selectbox if s.label == "Unit")).set_value("pct").run()
+    assert any("rises by at least 3%" in c.value for c in at.caption)
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    r = store.alert(alert.id).rearm
+    assert (r.mode, r.delta_measure, r.delta_direction, r.delta_amount, r.delta_unit) == \
+        ("delta", "rows", "up", 3.0, "pct")
+
+
 def test_overview_shows_groups_and_off_hours(wired, store):
     from heimdall.core.models import ActiveHours, Window
     first, second = store.alerts()[:2]

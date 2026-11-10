@@ -268,8 +268,11 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         saved = store.save_alert(alert)
         if before.steps != saved.steps or before.condition != saved.condition:
             store.reset_state(alert_id)   # a different question deserves a fresh start
-        elif before.channels.all_clear != saved.channels.all_clear:
-            store.update_state(alert_id, clear_since=None, clear_checks=0, clear_dirty=0)
+        else:
+            if before.channels.all_clear != saved.channels.all_clear:
+                store.update_state(alert_id, clear_since=None, clear_checks=0, clear_dirty=0)
+            if before.rearm != saved.rearm:
+                store.update_state(alert_id, delta_ref=None)   # the next firing sets a new reference
         store.log_event(who, "edited", saved)
         if before.enabled != saved.enabled:
             store.log_event(who, "enabled" if saved.enabled else "disabled", saved)

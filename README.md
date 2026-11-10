@@ -84,8 +84,9 @@ the stocks trading through a limit.
 The condition judges one step's table (the last by default): any rows, no
 rows, a row count, any or every row matching `column op value`, or a total
 (min, max, avg, sum, count). The re-arm policy decides whether a run that fires
-notifies: when it starts firing, when the result changes, at most every N
-minutes, or every run.
+notifies: when it starts firing, when the result changes, when rows are addedor removed, when a value moved
+by an amount or percent since the last notification (per key if wanted), at
+most every N minutes, or every run.
 
 An alert can also mail **all clear** (after every clean check, or once a period
 when nothing fired or failed), run only during **active hours** (days and time

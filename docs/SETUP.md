@@ -310,7 +310,14 @@ In **Builder**:
    are then offered in later steps and in the trigger.
 3. **Trigger**: which step's result to judge and when it fires (any rows, no
    rows, a row count, any or every row where `column op value`, or a total).
-   Then how often to notify while it keeps firing.
+   Then how often to notify while it keeps firing: once, when the rows change, **when rows are added or removed**
+   (the result has more or fewer rows than at the last notification),
+   at most every N minutes, every run, or **when a value moves by…**: while it
+   keeps firing, notify again only when a column's max/min/avg/sum (or the row
+   count) moved by at least an amount or a percent, up, down or either way,
+   since the last notification. **Per** compares each key (for example each
+   `sym`) separately, and a new key notifies too. Once the alert clears, the
+   next firing starts over.
 4. **Notify**: email addresses; optionally notify after N failures in a row,
    and when it clears. **Also mail when all clear** sends the same people a
    mail saying nothing is wrong: *With every check* (after each clean check),

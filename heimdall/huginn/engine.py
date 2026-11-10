@@ -1,6 +1,7 @@
 """Huginn's engine: decides which alerts are due, runs them, records and notifies."""
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -124,7 +125,8 @@ class Engine:
             was_off = bool((states.get(a.id) or {}).get("off_hours"))
             inside = hours.is_active(a.active_hours, now)
             if a.enabled and not inside and not was_off:
-                self.store.update_state(a.id, off_hours=1, last_triggered=0, last_triggered_hash="")
+                self.store.update_state(a.id, off_hours=1, last_triggered=0, last_triggered_hash="",
+                                       delta_ref=None)
                 opens = hours.next_open(a.active_hours, now)
                 when = opens.astimezone(cron.zone(a.active_hours.tz)).strftime("%a %d %b %H:%M")                     if opens else "never"
                 self.store.log_event("huginn", "outside active hours", a,
@@ -174,7 +176,8 @@ class Engine:
                           last_triggered=bool(s.get("last_triggered")),
                           last_notified_at=parse_iso(s.get("last_notified_at")),
                           last_triggered_hash=s.get("last_triggered_hash") or "",
-                          consecutive_errors=int(s.get("consecutive_errors") or 0))
+                          consecutive_errors=int(s.get("consecutive_errors") or 0),
+                          delta_ref=json.loads(s["delta_ref"]) if s.get("delta_ref") else None)
 
     def _execute(self, alert: Alert, source: str) -> int:
         started = self.clock()
@@ -194,6 +197,10 @@ class Engine:
             notified=ev.notify or ("all_clear" if all_clear else None),
             row_count=ev.row_count, message=ev.message, error=ev.error,
             steps=[o.summary() for o in ev.steps], snapshot=snapshot, result_hash=ev.result_hash)
+        if ev.notify == "trigger" and ev.delta_value is not None:
+            period["delta_ref"] = json.dumps(ev.delta_value)
+        elif ev.status == "ok" and not ev.condition_met:
+            period["delta_ref"] = None
         if period:
             self.store.update_state(alert.id, **period)
         if ev.notify:
