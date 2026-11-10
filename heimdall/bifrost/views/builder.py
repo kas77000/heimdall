@@ -7,6 +7,7 @@ step, never lets one widget's state leak into another's.
 from __future__ import annotations
 
 import uuid
+from datetime import time
 from typing import Any
 
 import pandas as pd
@@ -14,10 +15,11 @@ import streamlit as st
 from pydantic import ValidationError
 
 from heimdall.bifrost import common as c
-from heimdall.core import cron
+from heimdall.core import cron, hours
 from heimdall.core.conditions import describe
 from heimdall.core.kdb import build_q
-from heimdall.core.models import Alert, Condition, KdbStep
+from heimdall.core.models import ALL_CLEAR_INTERVALS, ActiveHours, Alert, Condition, KdbStep
+from heimdall.core.notify import ALL_CLEAR_FIELDS
 
 DRAFT, REV, LOADED, PREVIEW = "builder_draft", "builder_rev", "builder_loaded", "builder_preview"
 
@@ -33,6 +35,9 @@ CONDITIONS = {"has_rows": "Returns any rows", "no_rows": "Returns no rows",
               "all_rows": "Every row where…", "aggregate": "A total (max, sum…) is…"}
 REARM = {"transition": "When it starts firing", "on_change": "When the result changes",
          "cooldown": "At most every…", "every_run": "Every run while it fires"}
+NO_GROUP, NEW_GROUP = "(no group)", "➕ New group…"
+ZONES = ["Europe/London", "Europe/Paris", "America/New_York", "Asia/Tokyo", "Asia/Hong_Kong",
+         "Asia/Singapore", "Australia/Sydney", "UTC"]
 KIND_HELP = {
     "kdb": "Query a KDB server, guided or in raw q.",
     "bloomberg": "Ask Bloomberg B-PIPE for reference (bdp) or live (snap) values.",
@@ -161,11 +166,13 @@ def render() -> None:
     test_clicked = head[2].button("Test run", icon=":material/science:", width="stretch",
                                   help="Run every step now. Nothing is recorded or sent.")
 
-    tabs = st.segmented_control("Section", ["Steps", "Trigger", "Notify", "Details"],
+    tabs = st.segmented_control("Section", ["Steps", "Trigger", "Notify", "Active hours", "Details"],
                                 default="Steps", key=K("section"), label_visibility="collapsed")
     st.write("")
     if tabs == "Details":
         _details(draft)
+    elif tabs == "Active hours":
+        _hours(draft)
     elif tabs == "Trigger":
         _trigger(draft)
     elif tabs == "Notify":
@@ -190,6 +197,7 @@ def _details(d: dict) -> None:
     d["description"] = st.text_area("What it means when this fires", height=80,
                                     key=c.seed(K("desc"), d.get("description", "")),
                                     help="Goes at the top of every notification")
+    _group(d)
     tags = st.multiselect("Tags", options=sorted(set(d.get("tags", []))), accept_new_options=True,
                           key=c.seed(K("tags"), d.get("tags", [])), placeholder="Type to add a tag")
     d["tags"] = [t.strip() for t in tags if t.strip()]
@@ -207,6 +215,74 @@ def _details(d: dict) -> None:
         a.caption("Runs only when a schedule or a person starts it.")
     d["enabled"] = b.toggle("Enabled", key=c.seed(K("enabled"), d.get("enabled", False)),
                             help="Off: kept, but Huginn does not run it on its interval")
+
+
+def _group(d: dict) -> None:
+    existing = [g["name"] for g in (c.call(lambda: c.huginn().get("/groups"), quiet=True) or [])]
+    current = d.get("group", "")
+    options = [NO_GROUP, *sorted(set(existing) | ({current} if current else set()), key=str.lower), NEW_GROUP]
+    a, b = st.columns([2, 1])
+    pick = a.selectbox("Group", options, key=c.seed(K("group"), current or NO_GROUP),
+                       help="Alerts in a group are shown together in Overview and Alerts")
+    if pick == NEW_GROUP:
+        d["group"] = " ".join(b.text_input("New group name", key=K("group_new"),
+                                           placeholder="e.g. Equities").split())
+    else:
+        d["group"] = "" if pick == NO_GROUP else pick
+
+
+# -- active hours -----------------------------------------------------------------
+
+def _hours(d: dict) -> None:
+    h = d.setdefault("active_hours", ActiveHours().model_dump())
+    st.caption("When this alert is allowed to run on its interval. Outside these hours Huginn skips it; "
+               "runs started by hand or by a schedule still happen.")
+    h["enabled"] = st.toggle("Only run during set hours", key=c.seed(K("h_on"), h.get("enabled", False)))
+    if not h["enabled"]:
+        st.caption("Runs whenever it is switched on.")
+        return
+    a, b = st.columns([1, 2])
+    zones = ZONES if h.get("tz") in ZONES else [h.get("tz") or "UTC", *ZONES]
+    h["tz"] = a.selectbox("Time zone", zones, key=c.seed(K("h_tz"), h.get("tz") or "Europe/London"))
+    picked = b.pills("Days", hours.DAY_NAMES, selection_mode="multi",
+                     key=c.seed(K("h_days"), [hours.DAY_NAMES[i] for i in h.get("days", [])]),
+                     help="None picked = every day")
+    h["days"] = [hours.DAY_NAMES.index(x) for x in picked or []]
+
+    windows = h.setdefault("windows", [])
+    for w in windows:
+        w.setdefault("_uid", _uid())
+    for i, w in enumerate(list(windows), start=1):
+        r = st.columns([2, 2, 1], vertical_alignment="bottom")
+        start = r[0].time_input(f"From #{i}", step=60, key=c.seed(K("h_from", w["_uid"]), _clock(w["start"])))
+        end = r[1].time_input(f"To #{i}", step=60, key=c.seed(K("h_to", w["_uid"]), _clock(w["end"])))
+        w["start"], w["end"] = start.strftime("%H:%M"), end.strftime("%H:%M")
+        if r[2].button("Remove", key=K("h_del", w["_uid"]), icon=":material/delete:", width="stretch"):
+            windows.remove(w)
+            st.rerun()
+        if w["end"] < w["start"]:
+            st.caption(f"Window {i} crosses midnight: it runs from {w['start']} into the next day until {w['end']}.")
+    if len(windows) < hours.MAX_WINDOWS and st.button("Add window", icon=":material/add:"):
+        windows.append({"start": "09:00", "end": "17:00", "_uid": _uid()})
+        st.rerun()
+
+    try:
+        model = ActiveHours(**_clean(h))
+    except ValidationError as exc:
+        st.warning(exc.errors()[0]["msg"].removeprefix("Value error, "), icon=":material/warning:")
+        return
+    problems = hours.problems(model)
+    for p in problems:
+        st.warning(p.removeprefix("Active hours: "), icon=":material/warning:")
+    if not problems:
+        st.markdown(f":violet-badge[:material/schedule: Runs {hours.describe(model)}]")
+        if d.get("interval_secs", 0) == 0:
+            st.caption("This alert only runs when scheduled or started by hand, so these hours change nothing yet.")
+
+
+def _clock(hhmm: str) -> time:
+    h, m = (hhmm or "09:00").split(":")
+    return time(int(h), int(m))
 
 
 # -- steps --------------------------------------------------------------------
@@ -517,6 +593,7 @@ def _notify(d: dict) -> None:
         ch["error_after"] = int(b.number_input("After this many failures in a row", min_value=1, max_value=50,
                                                key=c.seed(K("n_errn"), ch.get("error_after", 3))))
     ch["notify_on_recovery"] = h.toggle("Tell me when it clears", key=c.seed(K("n_rec"), ch.get("notify_on_recovery", False)))
+    _all_clear(d, ch)
     if not ch["email_to"]:
         st.caption("No one will be told. Firings still show in Overview and History.")
     elif st.button("Send a test notification", icon=":material/send:"):
@@ -524,6 +601,39 @@ def _notify(d: dict) -> None:
         for dl in (res or {}).get("deliveries", []):
             (st.success if dl["ok"] else st.error)(f"{dl['channel']} → {dl['target']}"
                                                    + ("" if dl["ok"] else f": {dl['error']}"))
+
+
+def _all_clear(d: dict, ch: dict) -> None:
+    ac = ch.setdefault("all_clear", {"enabled": False, "mode": "interval", "interval_secs": 3600,
+                                     "subject": "", "body": ""})
+    ac["enabled"] = st.toggle("Also mail when all clear", key=c.seed(K("ac_on"), ac.get("enabled", False)),
+                              help="A mail to the same people saying nothing fired")
+    if not ac["enabled"]:
+        return
+    with st.container(border=True):
+        whens = {"With every check": None, **ALL_CLEAR_INTERVALS}
+        current = ("With every check" if ac.get("mode") == "every_check" else
+                   next((k for k, v in ALL_CLEAR_INTERVALS.items() if v == ac.get("interval_secs")), "1 hour"))
+        when = st.selectbox("When", list(whens), key=c.seed(K("ac_when"), current),
+                            help="A period with clean checks and none that fired or failed sends one mail")
+        if whens[when] is None:
+            ac["mode"] = "every_check"
+        else:
+            ac["mode"], ac["interval_secs"] = "interval", whens[when]
+            if d.get("interval_secs") and ac["interval_secs"] <= d["interval_secs"]:
+                st.markdown(":orange[The period is not longer than the check interval, "
+                            "so this mails after every clean check.]")
+        default_subject = (ch.get("subject") or f"[Heimdall] {d['name']}") + ": ALL CLEAR"
+        ac["subject"] = st.text_input("Subject", key=c.seed(K("ac_subj"), ac.get("subject", "")),
+                                      placeholder=default_subject)
+        default_body = ("{alert} did not fire at {until}. Rows returned: {rows}." if ac["mode"] == "every_check"
+                        else "{alert} did not fire between {since} and {until}. Clean checks: {checks}.")
+        ac["body"] = st.text_area("Body", height=80, key=c.seed(K("ac_body"), ac.get("body", "")),
+                                  placeholder=default_body)
+        names = " ".join("`{" + f + "}`" for f in ALL_CLEAR_FIELDS)
+        st.caption(f"You can use {names}. Times are in the alert's active-hours time zone.")
+        if not ch.get("email_to"):
+            st.caption(":orange[Add someone under Email to, or no all-clear mail is sent.]")
 
 
 # -- preview ------------------------------------------------------------------

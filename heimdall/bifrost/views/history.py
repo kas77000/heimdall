@@ -83,7 +83,7 @@ def _runs() -> None:
         "Result": {"triggered": "● Fired" if r["triggered"] else "● Still firing", "ok": "● OK",
                    "error": "● Error"}[r["status"]],
         "Rows": r["row_count"],
-        "Told": {"trigger": "Fired", "error": "Error", "recovery": "Cleared"}.get(r["notified"] or "", ""),
+        "Told": {"trigger": "Fired", "error": "Error", "recovery": "Cleared", "all_clear": "All clear"}.get(r["notified"] or "", ""),
         "Started by": c.SOURCE.get(r["source"], r["source"]),
         "Took": f"{r['duration']:.2f}s",
         "Ack": "✓" if r.get("acknowledged_at") else ("pending" if r["triggered"] else ""),

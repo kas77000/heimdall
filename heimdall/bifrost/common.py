@@ -20,6 +20,7 @@ STATUS = {
     "off": ("Off", "gray", ":material/pause_circle:"),
     "never": ("Not run yet", "gray", ":material/schedule:"),
     "running": ("Running", "blue", ":material/progress_activity:"),
+    "off_hours": ("Off-hours", "violet", ":material/bedtime:"),
 }
 KIND = {"kdb": ("KDB", ":material/database:"), "bloomberg": ("Bloomberg", ":material/candlestick_chart:"),
         "script": ("Script", ":material/terminal:"), "compute": ("Compute", ":material/function:")}
@@ -127,7 +128,9 @@ def status_key(row: dict) -> str:
     if row.get("running"):
         return "running"
     if not row.get("enabled"):
-        return "off" if row.get("last_status") is None else "off"
+        return "off"
+    if row.get("off_hours"):
+        return "off_hours"
     return row.get("last_status") or "never"
 
 
@@ -155,7 +158,7 @@ def page_header(title: str, caption: str = "") -> None:
         st.caption(caption)
 
 
-_DOT_COLOURS = {"Fired": "#f06470", "Error": "#e8a33d", "OK": "#3ecf8e", "Running": "#5aa9e6"}
+_DOT_COLOURS = {"Fired": "#f06470", "Error": "#e8a33d", "OK": "#3ecf8e", "Running": "#5aa9e6", "Off-hours": "#a78bfa"}
 
 
 def coloured(df: pd.DataFrame, column: str):

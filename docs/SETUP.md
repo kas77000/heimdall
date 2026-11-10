@@ -312,11 +312,36 @@ In **Builder**:
    rows, a row count, any or every row where `column op value`, or a total).
    Then how often to notify while it keeps firing.
 4. **Notify**: email addresses; optionally notify after N failures in a row,
-   and when it clears.
-5. **Details**: name, owner, description (it heads every email), tags, how
-   often Huginn checks it (or *Schedule only*), and *Enabled*.
-6. **Save alert**. Save stays disabled while anything is wrong, and the reasons
+   and when it clears. **Also mail when all clear** sends the same people a
+   mail saying nothing is wrong: *With every check* (after each clean check),
+   or once every 15 minutes, 30 minutes, 1, 2 or 4 hours, or a day, if that
+   period had clean checks and none that fired or failed. A clean check is
+   one whose condition was not met and that did not fail. The period starts
+   again at once, and again whenever the all-clear settings change. Subject
+   and body can be your own, with `{alert}`, `{group}`, `{checks}`,
+   `{since}`, `{until}` and `{rows}`; times are written in the alert's
+   active-hours time zone. History shows these runs as *All clear*.
+5. **Active hours**: switch on *Only run during set hours*, pick a time zone,
+   the days (none = every day) and up to six windows (*From*, *To*; the *To*
+   minute is not included). A window whose end is before its start crosses
+   midnight and belongs to the day it starts on, so Friday 22:00–02:00 runs
+   into Saturday. Outside its hours Huginn skips the alert's regular checks;
+   runs started by hand or by a *Run it* schedule still happen. The alert
+   shows as *Off-hours* in Overview with when it opens again, History →
+   Changes notes when it went outside its hours, and leaving its hours resets
+   it, so the first firing after they reopen notifies afresh.
+6. **Details**: name, owner, **group**, description (it heads every email),
+   tags, how often Huginn checks it (or *Schedule only*), and *Enabled*. Pick
+   an existing group or *➕ New group…*.
+7. **Save alert**. Save stays disabled while anything is wrong, and the reasons
    are listed beside it.
+
+**Groups.** Each alert can belong to one group. Overview shows one section per
+group with how many alerts fired, failed or are off-hours, and can be filtered
+to some groups. In **Alerts** there is a *Group* column and filter; select
+alerts and use *Group* to move them. *Manage groups* renames a group (renaming
+onto an existing group merges the two), dissolves it (its alerts stay, without
+a group), or switches every alert in it on or off.
 
 Alerts can be exported (Alerts → select → Export, or Settings → Import /
 export) and imported elsewhere (section 13). Imported alerts arrive switched

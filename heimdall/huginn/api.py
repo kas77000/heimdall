@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from heimdall import __version__
 from heimdall.config import Config
-from heimdall.core import cron
+from heimdall.core import cron, hours
 from heimdall.core.chain import Pool, validate as validate_alert
 from heimdall.core.conditions import describe
 from heimdall.core.kdb import list_columns, list_tables
@@ -42,6 +42,16 @@ class FiredRequest(BaseModel):
     at: str
     outcome: Literal["applied", "unchanged", "skipped", "failed"] = "applied"
     detail: str = ""
+
+
+class GroupRename(BaseModel):
+    old: str
+    new: str = ""
+
+
+class GroupSwitch(BaseModel):
+    group: str
+    enabled: bool
 
 
 class Bundle(BaseModel):
@@ -92,7 +102,9 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
             unack = store.count_runs(alert_id=a.id, unacknowledged=True)
             alerts.append({
                 "id": a.id, "name": a.name, "enabled": a.enabled, "interval_secs": a.interval_secs,
-                "tags": a.tags, "owner": a.owner, "running": a.id in inflight,
+                "tags": a.tags, "owner": a.owner, "group": a.group, "running": a.id in inflight,
+                "off_hours": a.enabled and not hours.is_active(a.active_hours, now),
+                "active_hours": hours.describe(a.active_hours),
                 "last_run_at": st.get("last_run_at"), "last_status": st.get("last_status"),
                 "last_message": st.get("last_message"), "last_run_id": st.get("last_run_id"),
                 "consecutive_errors": st.get("consecutive_errors", 0),
@@ -256,10 +268,50 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         saved = store.save_alert(alert)
         if before.steps != saved.steps or before.condition != saved.condition:
             store.reset_state(alert_id)   # a different question deserves a fresh start
+        elif before.channels.all_clear != saved.channels.all_clear:
+            store.update_state(alert_id, clear_since=None, clear_checks=0, clear_dirty=0)
         store.log_event(who, "edited", saved)
         if before.enabled != saved.enabled:
             store.log_event(who, "enabled" if saved.enabled else "disabled", saved)
         return saved.model_dump()
+
+    # -- groups --------------------------------------------------------------------
+
+    @app.get("/groups", dependencies=secured)
+    def groups():
+        out: dict[str, dict] = {}
+        for a in store.alerts():
+            if a.group:
+                g = out.setdefault(a.group, {"name": a.group, "alerts": 0, "enabled": 0})
+                g["alerts"] += 1
+                g["enabled"] += int(a.enabled)
+        return sorted(out.values(), key=lambda g: g["name"].lower())
+
+    @app.post("/groups/rename", dependencies=secured)
+    def rename_group(body: GroupRename, who: str = Depends(actor)):
+        """Moves every alert of ``old`` to ``new``: onto an existing group merges
+        the two, and an empty ``new`` dissolves the group."""
+        old, new = Alert(name="x", group=body.old).group, Alert(name="x", group=body.new).group
+        if not old:
+            raise HTTPException(422, "name the group to rename")
+        moved = [a for a in store.alerts() if a.group == old]
+        if not moved:
+            raise NotFound(f"no group called '{old}'")
+        for a in moved:
+            store.save_alert(a.model_copy(update={"group": new}))
+        store.log_event(who, "group dissolved" if not new else "group renamed",
+                        detail=f"{old} → {new}" if new else old)
+        return {"moved": len(moved), "group": new}
+
+    @app.post("/groups/switch", dependencies=secured)
+    def switch_group(body: GroupSwitch, who: str = Depends(actor)):
+        changed = 0
+        for a in store.alerts():
+            if a.group == body.group and store.set_enabled(a.id, body.enabled):
+                changed += 1
+                store.log_event(who, "enabled" if body.enabled else "disabled", a,
+                                detail=f"whole group {body.group}")
+        return {"changed": changed}
 
     @app.delete("/alerts/{alert_id}", dependencies=secured)
     def delete_alert(alert_id: int, keep_history: bool = True, who: str = Depends(actor)):

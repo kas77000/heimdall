@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
+# alert_state columns added since the first release
+STATE_COLUMNS = {
+    "off_hours": "INTEGER NOT NULL DEFAULT 0",      # outside its active hours, as last seen
+    "clear_since": "TEXT",                          # the all-clear period started
+    "clear_checks": "INTEGER NOT NULL DEFAULT 0",   # clean checks in that period
+    "clear_dirty": "INTEGER NOT NULL DEFAULT 0",    # a check fired or failed in that period
+}
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -133,6 +142,14 @@ class Muninn:
             if self.path != ":memory:":
                 self._db.execute("PRAGMA journal_mode = WAL")
             self._db.executescript(SCHEMA)
+            self._add_columns("alert_state", STATE_COLUMNS)
+
+    def _add_columns(self, table: str, columns: dict[str, str]) -> None:
+        """Columns added after a database was first made (SQLite has no ADD IF NOT EXISTS)."""
+        have = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in have:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         with self._lock:
@@ -273,7 +290,21 @@ class Muninn:
         return dict(r) if r else {"alert_id": alert_id, "last_run_id": None, "last_run_at": None,
                                   "last_status": None, "last_message": None, "last_triggered": 0,
                                   "last_notified_at": None, "last_triggered_hash": "",
-                                  "consecutive_errors": 0}
+                                  "consecutive_errors": 0, "off_hours": 0, "clear_since": None,
+                                  "clear_checks": 0, "clear_dirty": 0}
+
+    def update_state(self, alert_id: int, **values: Any) -> None:
+        """Set some of an alert's state columns, keeping the rest."""
+        allowed = set(STATE_COLUMNS) | {"last_triggered", "last_triggered_hash"}
+        bad = set(values) - allowed
+        if bad:
+            raise ValueError(f"not state columns: {', '.join(sorted(bad))}")
+        if not values:
+            return
+        with self._tx() as db:
+            db.execute("INSERT OR IGNORE INTO alert_state(alert_id) VALUES (?)", (alert_id,))
+            db.execute(f"UPDATE alert_state SET {', '.join(f'{k} = ?' for k in values)} WHERE alert_id = ?",
+                       (*values.values(), alert_id))
 
     def states(self) -> dict[int, dict]:
         return {r["alert_id"]: dict(r) for r in self._all("SELECT * FROM alert_state")}

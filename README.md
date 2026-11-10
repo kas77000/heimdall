@@ -87,6 +87,12 @@ rows, a row count, any or every row matching `column op value`, or a total
 notifies: when it starts firing, when the result changes, at most every N
 minutes, or every run.
 
+An alert can also mail **all clear** (after every clean check, or once a period
+when nothing fired or failed), run only during **active hours** (days and time
+windows in a time zone, overnight windows included), and belong to a **group**
+that Overview and Alerts show together. See [docs/SETUP.md](docs/SETUP.md),
+section 9.
+
 ### Scripts
 
 Alerts can only run scripts an administrator has registered (Settings →

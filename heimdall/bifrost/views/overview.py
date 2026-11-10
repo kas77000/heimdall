@@ -6,9 +6,10 @@ import streamlit as st
 
 from heimdall.bifrost import common as c
 
-ORDER = {"triggered": 0, "error": 1, "running": 2, "ok": 3, "never": 4, "off": 5}
+ORDER = {"triggered": 0, "error": 1, "running": 2, "ok": 3, "never": 4, "off_hours": 5, "off": 6}
 DOT = {"triggered": "● Fired", "error": "● Error", "running": "◌ Running", "ok": "● OK",
-       "never": "○ Not run yet", "off": "○ Off"}
+       "never": "○ Not run yet", "off_hours": "◐ Off-hours", "off": "○ Off"}
+UNGROUPED = "Ungrouped"
 
 
 def go(page: str, **state) -> None:
@@ -72,7 +73,25 @@ def _live() -> None:
         _attention_row(a)
 
     st.markdown("#### All alerts")
-    _alerts_table(alerts)
+    groups = sorted({a.get("group") or "" for a in alerts}, key=lambda g: (g == "", g.lower()))
+    if groups == [""]:
+        _alerts_table(alerts, "all")
+        return
+    names = [g or UNGROUPED for g in groups]
+    shown = st.multiselect("Filter groups", names, placeholder="All groups", key="overview_groups")
+    for g, name in zip(groups, names):
+        if shown and name not in shown:
+            continue
+        members = [a for a in alerts if (a.get("group") or "") == g]
+        count = lambda key: sum(1 for a in members if a["_status"] == key)   # noqa: E731
+        fired, errors, resting = count("triggered"), count("error"), count("off_hours")
+        label = f"**{name}** · {len(members)}"
+        label += f" · :red[{fired} fired]" if fired else " · 0 fired"
+        label += f" · :orange[{errors} error]" if errors else " · 0 error"
+        if resting:
+            label += f" · :violet[{resting} off-hours]"
+        with st.expander(label, expanded=True, icon=":material/folder:"):
+            _alerts_table(members, name)
 
 
 def _attention_row(a: dict) -> None:
@@ -97,7 +116,7 @@ def _attention_row(a: dict) -> None:
             st.rerun(scope="fragment")
 
 
-def _alerts_table(alerts: list[dict]) -> None:
+def _alerts_table(alerts: list[dict], key: str) -> None:
     rows = sorted(alerts, key=lambda a: (ORDER.get(a["_status"], 9), a["name"].lower()))
     df = pd.DataFrame([{
         "Status": DOT[a["_status"]],
@@ -105,12 +124,12 @@ def _alerts_table(alerts: list[dict]) -> None:
         "Sources": " · ".join(c.KIND[k][0] for k in a["kinds"]),
         "Checks": c.every(a["interval_secs"]) if a["enabled"] else "Disabled",
         "Last run": c.ago(a["last_run_at"]),
-        "Next": c.ago(a["next_due_at"]) if a["next_due_at"] else "",
+        "Next": (("opens " if a.get("off_hours") else "") + c.ago(a["next_due_at"])) if a["next_due_at"] else "",
         "Unack.": str(a["unacknowledged"]) if a["unacknowledged"] else "",
         "Condition": a["condition"],
     } for a in rows])
     event = st.dataframe(c.coloured(df, "Status"), hide_index=True, width="stretch", on_select="rerun",
-                         selection_mode="single-row", key="overview_table", height=c.height(len(df)),
+                         selection_mode="single-row", key=f"overview_table_{key}", height=c.height(len(df)),
                          column_config={"Status": st.column_config.TextColumn(width="small"),
                                         "Unack.": st.column_config.TextColumn(width="small"),
                                         "Condition": st.column_config.TextColumn(width="large")})
@@ -119,18 +138,23 @@ def _alerts_table(alerts: list[dict]) -> None:
         st.caption("Select a row to run, switch on or off, or edit that alert.")
         return
     a = rows[picked[0]]
+    if a.get("off_hours"):
+        st.caption(f":material/bedtime: Outside its active hours ({a.get('active_hours')}). "
+                   f"Checks resume {c.ago(a['next_due_at']) if a['next_due_at'] else 'when its hours open'}; "
+                   "running it by hand still works.")
     bar = st.columns([1, 1, 1, 1, 3])
-    if bar[0].button("Run now", icon=":material/play_arrow:", type="primary", width="stretch"):
+    k = f"{key}_{a['id']}"
+    if bar[0].button("Run now", key=f"run_{k}", icon=":material/play_arrow:", type="primary", width="stretch"):
         with st.spinner(f"Running {a['name']}…"):
             run = c.call(lambda: c.huginn().post(f"/alerts/{a['id']}/run"))
         if run:
             st.toast(f"{a['name']}: {c.STATUS[run['status']][0]}", icon=c.STATUS[run["status"]][2])
         st.rerun(scope="fragment")
     label, path = ("Switch off", "disable") if a["enabled"] else ("Switch on", "enable")
-    if bar[1].button(label, icon=":material/power_settings_new:", width="stretch"):
+    if bar[1].button(label, key=f"switch_{k}", icon=":material/power_settings_new:", width="stretch"):
         c.call(lambda: c.huginn().post(f"/alerts/{a['id']}/{path}"))
         st.rerun(scope="fragment")
-    if bar[2].button("Edit", icon=":material/edit:", width="stretch"):
+    if bar[2].button("Edit", key=f"edit_{k}", icon=":material/edit:", width="stretch"):
         go("builder", builder_request={"id": a["id"]})
-    if bar[3].button("History", icon=":material/history:", width="stretch"):
+    if bar[3].button("History", key=f"hist_{k}", icon=":material/history:", width="stretch"):
         go("history", history_alert=a["id"], history_run=None)

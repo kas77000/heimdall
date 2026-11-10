@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import html
+import re
 import smtplib
 from dataclasses import dataclass
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Callable, Optional
 
 import pandas as pd
 
-from heimdall.core import conditions
+from heimdall.core import conditions, cron
 from heimdall.core.evaluate import Evaluation
 from heimdall.core.models import Alert
 
@@ -90,6 +92,51 @@ def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], url) -> 
         parts.append(f'<p style="margin-top:14px"><a href="{html.escape(url)}">Open in Bifrost</a></p>')
     parts.append("</div>")
     return "".join(parts)
+
+
+# -- all clear ------------------------------------------------------------------
+
+ALL_CLEAR_FIELDS = ("alert", "group", "checks", "since", "until", "rows")
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+def fill(template: str, values: dict) -> str:
+    """``{alert}`` and the like filled in; anything else is left exactly as typed."""
+    return _PLACEHOLDER.sub(lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0),
+                            template)
+
+
+def compose_all_clear(alert: Alert, *, checks: int, since: datetime, until: datetime,
+                      rows: Optional[int], bifrost_url: str = "") -> Message:
+    ac = alert.channels.all_clear
+    tz = cron.zone(alert.active_hours.tz)
+    stamp = lambda dt: dt.astimezone(tz).strftime("%Y-%m-%d %H:%M")   # noqa: E731
+    values = {"alert": alert.name, "group": alert.group or "no group", "checks": checks,
+              "since": stamp(since), "until": stamp(until),
+              "rows": "-" if rows is None else rows}
+    if ac.subject.strip():
+        subject = " ".join(fill(ac.subject, values).split())
+    else:
+        subject = (alert.channels.subject.strip() or f"[Heimdall] {alert.name}") + ": ALL CLEAR"
+    if ac.body.strip():
+        body = fill(ac.body, values)
+    elif ac.mode == "every_check":
+        body = fill("{alert} did not fire at {until}.\nRows returned: {rows}.", values)
+    else:
+        body = fill("{alert} did not fire between {since} and {until}.\n"
+                    "Clean checks: {checks}. Rows in the last check: {rows}.", values)
+    body += f"\nTimes are {alert.active_hours.tz}."
+    text = body + (f"\n\nOpen in Bifrost: {bifrost_url}" if bifrost_url else "")
+    colour = "#2e7d32"
+    parts = ['<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1d2433">',
+             f'<div style="border-left:4px solid {colour};padding:4px 12px;margin-bottom:12px">',
+             f'<div style="font-size:12px;letter-spacing:.08em;color:{colour};font-weight:600">ALL CLEAR</div>',
+             f'<div style="font-size:18px;font-weight:600">{html.escape(alert.name)}</div></div>']
+    parts += [f'<p style="margin:6px 0">{html.escape(line)}</p>' for line in body.splitlines() if line.strip()]
+    if bifrost_url:
+        parts.append(f'<p style="margin-top:14px"><a href="{html.escape(bifrost_url)}">Open in Bifrost</a></p>')
+    parts.append("</div>")
+    return Message(subject, text, "".join(parts))
 
 
 def send_email(smtp: SmtpSettings, to: list[str], msg: Message) -> None:

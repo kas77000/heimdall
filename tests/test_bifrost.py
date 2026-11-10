@@ -117,3 +117,64 @@ def test_export_choice_and_import_selection(wired):
         assert not at.exception, what
     at.multiselect(key="import_what").set_value(["schedules"]).run()
     assert not at.exception and not at.error
+
+
+def _open_builder(store, name):
+    alert = next(a for a in store.alerts() if a.name.startswith(name))
+    at = _page("builder")
+    at.session_state["builder_request"] = {"id": alert.id}
+    return alert, at.run()
+
+
+def test_builder_active_hours_and_all_clear_are_saved(wired, store):
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Active hours").run()
+    assert not at.exception
+    next(t for t in at.toggle if t.label == "Only run during set hours").set_value(True).run()
+    assert not at.exception
+    assert any("Runs 09:00-17:00 Mon-Fri (Europe/London)" in m.value for m in at.markdown)
+    _button(at, "Add window").click().run()
+    assert len([t for t in at.time_input if t.label.startswith("From")]) == 2
+
+    at.segmented_control[0].set_value("Notify").run()
+    at.text_area[0].set_value("desk@example.com")
+    next(t for t in at.toggle if t.label == "Also mail when all clear").set_value(True).run()
+    assert not at.exception
+    at.selectbox(key=next(s.key for s in at.selectbox if s.label == "When")).set_value("4 hours").run()
+
+    at.segmented_control[0].set_value("Details").run()
+    group = next(s for s in at.selectbox if s.label == "Group")
+    group.set_value("➕ New group…").run()
+    next(t for t in at.text_input if t.label == "New group name").set_value("Market data").run()
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+
+    saved = store.alert(alert.id)
+    assert saved.active_hours.enabled and len(saved.active_hours.windows) == 2
+    assert saved.channels.all_clear.enabled and saved.channels.all_clear.interval_secs == 14400
+    assert saved.group == "Market data"
+
+
+def test_overview_shows_groups_and_off_hours(wired, store):
+    from heimdall.core.models import ActiveHours, Window
+    first, second = store.alerts()[:2]
+    store.save_alert(first.model_copy(update={"group": "Equities"}))
+    store.save_alert(second.model_copy(update={"active_hours": ActiveHours(
+        enabled=True, days=[], windows=[Window(start="00:00", end="00:01")], tz="UTC")}))
+    at = _page("overview").run()
+    assert not at.exception, at.exception
+    labels = [e.label for e in at.expander]
+    assert any("Equities" in l for l in labels) and any("Ungrouped" in l for l in labels)
+
+
+def test_alerts_page_moves_and_manages_groups(wired, store):
+    at = _page("alerts").run()
+    assert not at.exception
+    a = store.alerts()[0]
+    store.save_alert(a.model_copy(update={"group": "Equities"}))
+    at = _page("alerts").run()
+    assert not at.exception
+    next(t for t in at.text_input if t.key == "grp_name_Equities").set_value("Stocks").run()
+    next(b for b in at.button if b.key == "grp_ren_Equities").click().run()
+    assert not at.exception
+    assert store.alert(a.id).group == "Stocks"

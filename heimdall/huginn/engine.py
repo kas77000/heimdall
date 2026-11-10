@@ -9,12 +9,13 @@ from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 from heimdall.config import Config
+from heimdall.core import cron, hours
 from heimdall.core.chain import Pool, frame_to_records
 from heimdall.core.evaluate import AlertState, Evaluation, evaluate_alert
 from heimdall.core.kdb import PyKxClient
 from heimdall.core.models import Alert
-from heimdall.core.notify import SmtpSettings, compose, deliver
-from heimdall.muninn.store import Muninn, parse_iso, utcnow
+from heimdall.core.notify import SmtpSettings, compose, compose_all_clear, deliver
+from heimdall.muninn.store import Muninn, iso, parse_iso, utcnow
 
 log = logging.getLogger("heimdall.huginn")
 
@@ -88,7 +89,7 @@ class Engine:
         states = self.store.states()
         out = []
         for a in self.store.alerts():
-            if not a.enabled or a.interval_secs <= 0:
+            if not a.enabled or a.interval_secs <= 0 or not hours.is_active(a.active_hours, now):
                 continue
             last = parse_iso((states.get(a.id) or {}).get("last_run_at"))
             if last is None or (now - last).total_seconds() >= a.interval_secs:
@@ -98,6 +99,9 @@ class Engine:
     def next_due(self, alert: Alert, state: dict) -> Optional[datetime]:
         if not alert.enabled or alert.interval_secs <= 0:
             return None
+        now = self.clock()
+        if not hours.is_active(alert.active_hours, now):
+            return hours.next_open(alert.active_hours, now)
         last = parse_iso(state.get("last_run_at"))
         return self.clock() if last is None else last + timedelta(seconds=alert.interval_secs)
 
@@ -105,11 +109,28 @@ class Engine:
         now = self.clock()
         self.last_tick = now
         self._retention(now)
+        self._watch_hours(now)
         if self.paused:
             return
         for alert in self.due(now):
             if self._claim(alert.id):
                 self._executor.submit(self._run_claimed, alert, "interval")
+
+    def _watch_hours(self, now: datetime) -> None:
+        """Notice alerts leaving and entering their active hours. Leaving disarms
+        the alert, so the first firing after the window reopens notifies afresh."""
+        states = self.store.states()
+        for a in self.store.alerts():
+            was_off = bool((states.get(a.id) or {}).get("off_hours"))
+            inside = hours.is_active(a.active_hours, now)
+            if a.enabled and not inside and not was_off:
+                self.store.update_state(a.id, off_hours=1, last_triggered=0, last_triggered_hash="")
+                opens = hours.next_open(a.active_hours, now)
+                when = opens.astimezone(cron.zone(a.active_hours.tz)).strftime("%a %d %b %H:%M")                     if opens else "never"
+                self.store.log_event("huginn", "outside active hours", a,
+                                     detail=f"{hours.describe(a.active_hours)}; checks resume {when}")
+            elif inside and was_off:
+                self.store.update_state(a.id, off_hours=0)
 
     def _claim(self, alert_id: int) -> bool:
         with self._inflight_lock:
@@ -160,6 +181,7 @@ class Engine:
         t0 = time.monotonic()
         state = self._state(alert.id)
         ev = evaluate_alert(alert, self.pool, state, started)
+        all_clear, period = self._all_clear(alert, ev, self.store.state(alert.id), started)
         # A firing is an event, not every check that is still true: the run that
         # starts an episode, or one that notified. Only those ask to be acknowledged,
         # otherwise an alert firing for an hour would ask 180 times.
@@ -168,11 +190,16 @@ class Engine:
         snapshot = frame_to_records(ev.judged, self.cfg.snapshot_rows) if ev.judged is not None else None
         run_id = self.store.record_run(
             alert=alert, started_at=started, duration=duration, source=source, status=ev.status,
-            condition_met=ev.condition_met, triggered=fired, notified=ev.notify,
+            condition_met=ev.condition_met, triggered=fired,
+            notified=ev.notify or ("all_clear" if all_clear else None),
             row_count=ev.row_count, message=ev.message, error=ev.error,
             steps=[o.summary() for o in ev.steps], snapshot=snapshot, result_hash=ev.result_hash)
+        if period:
+            self.store.update_state(alert.id, **period)
         if ev.notify:
             self._notify(alert, ev, run_id)
+        elif all_clear:
+            self._send_all_clear(alert, ev, run_id, started, **all_clear)
         log.info("%s [%s] %s", alert.name, source, ev.message)
         return run_id
 
@@ -182,6 +209,38 @@ class Engine:
         deliveries = deliver(alert, msg, smtp_from(self.store.settings()), **self._deliver_kw)
         if deliveries:
             self.store.record_deliveries(run_id, ev.notify, deliveries)
+
+    def _all_clear(self, alert: Alert, ev: Evaluation, row: dict, now: datetime) -> tuple[Optional[dict], dict]:
+        """Whether this check sends the all-clear mail, and the period's new state.
+
+        A clean check is one whose condition was not met and that did not fail.
+        ``every_check`` (or a period no longer than the check interval) mails after
+        each clean check. Otherwise the period mails when it ends, if it had clean
+        checks and none that fired or failed; the next period starts at once.
+        """
+        ac = alert.channels.all_clear
+        if not ac.enabled or not any(e.strip() for e in alert.channels.email_to):
+            return None, {}
+        clean = ev.status == "ok"
+        if ac.mode == "every_check" or (alert.interval_secs and ac.interval_secs <= alert.interval_secs):
+            # a recovery mail already says it is clear
+            return ({"checks": 1, "since": now} if clean and not ev.notify else None), {}
+        since = parse_iso(row.get("clear_since")) or now
+        checks = int(row.get("clear_checks") or 0) + (1 if clean else 0)
+        dirty = bool(row.get("clear_dirty")) or not clean
+        if (now - since).total_seconds() >= ac.interval_secs:
+            send = {"checks": checks, "since": since} if checks and not dirty else None
+            return send, {"clear_since": iso(now), "clear_checks": 0, "clear_dirty": 0}
+        return None, {"clear_since": iso(since), "clear_checks": checks, "clear_dirty": int(dirty)}
+
+    def _send_all_clear(self, alert: Alert, ev: Evaluation, run_id: int, now: datetime, *,
+                        checks: int, since: datetime) -> None:
+        url = f"{self.cfg.bifrost_url.rstrip('/')}/history?run={run_id}" if self.cfg.bifrost_url else ""
+        msg = compose_all_clear(alert, checks=checks, since=since, until=now, rows=ev.row_count,
+                                bifrost_url=url)
+        deliveries = deliver(alert, msg, smtp_from(self.store.settings()), **self._deliver_kw)
+        if deliveries:
+            self.store.record_deliveries(run_id, "all_clear", deliveries)
 
     def preview(self, alert: Alert, limit: int = 200) -> dict:
         """Run an unsaved or saved alert without recording or notifying anything."""

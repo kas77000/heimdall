@@ -9,7 +9,7 @@ from typing import Callable, Optional, Protocol
 
 import pandas as pd
 
-from heimdall.core import compute, refs, scripts
+from heimdall.core import compute, hours, refs, scripts
 from heimdall.core.bloomberg import BloombergSource, BpipeSource, FakeBloomberg
 from heimdall.core.kdb import KdbClient, MockKdbClient, PyKxClient, build_q
 from heimdall.core.models import (Alert, BloombergStep, ComputeStep, Connection, KdbStep,
@@ -231,6 +231,7 @@ def validate(alert: Alert, connections: dict[str, Connection], scripts_by_name: 
         problems.append(f"The condition judges step '{target}', which does not exist.")
     if alert.condition.type in ("any_row", "all_rows", "aggregate") and not alert.condition.column:
         problems.append("The condition needs a column.")
+    problems += hours.problems(alert.active_hours)
     return problems
 
 

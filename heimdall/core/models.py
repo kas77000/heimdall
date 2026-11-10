@@ -202,12 +202,72 @@ class Rearm(BaseModel):
     cooldown_secs: int = 900
 
 
+ALL_CLEAR_INTERVALS = {"15 minutes": 900, "30 minutes": 1800, "1 hour": 3600, "2 hours": 7200,
+                       "4 hours": 14400, "1 day": 86400}
+
+
+class AllClear(BaseModel):
+    """A mail saying nothing is wrong, to the alert's recipients.
+
+    ``every_check``: after each clean check. ``interval``: once a period, if the
+    period had clean checks and none that fired or failed.
+    """
+    enabled: bool = False
+    mode: Literal["every_check", "interval"] = "interval"
+    interval_secs: int = 3600
+    subject: str = ""                # empty = "<alert subject>: ALL CLEAR"
+    body: str = ""                   # empty = a sentence with the period and the checks
+
+    @field_validator("interval_secs")
+    @classmethod
+    def _interval(cls, v: int) -> int:
+        if v < 60:
+            raise ValueError("the all-clear period is at least a minute")
+        return v
+
+
 class Channels(BaseModel):
     email_to: list[str] = Field(default_factory=list)
     subject: str = ""                # empty = "[Heimdall] <alert name>"
     notify_on_error: bool = False
     error_after: int = 3             # consecutive errors before an error notifies
     notify_on_recovery: bool = False
+    all_clear: AllClear = Field(default_factory=AllClear)
+
+
+HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class Window(BaseModel):
+    """From ``start`` to ``end`` (not included), local time. An end before the
+    start crosses midnight and belongs to the day it starts on."""
+    start: str = "09:00"
+    end: str = "17:00"
+
+    @field_validator("start", "end")
+    @classmethod
+    def _hhmm(cls, v: str) -> str:
+        v = (v or "").strip()
+        if len(v) == 4 and v[1] == ":":
+            v = "0" + v
+        if not HHMM_RE.match(v):
+            raise ValueError(f"'{v}' is not a time like 09:30")
+        return v
+
+
+class ActiveHours(BaseModel):
+    """When the alert's regular checks are allowed to run at all."""
+    enabled: bool = False
+    days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])   # 0 = Monday; empty = every day
+    windows: list[Window] = Field(default_factory=lambda: [Window()])
+    tz: str = "Europe/London"
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, v: list[int]) -> list[int]:
+        if any(d not in range(7) for d in v):
+            raise ValueError("days run from 0 (Monday) to 6 (Sunday)")
+        return sorted(set(v))
 
 
 class Alert(BaseModel):
@@ -215,9 +275,11 @@ class Alert(BaseModel):
     name: str
     description: str = ""
     owner: str = ""
+    group: str = ""                  # one group per alert; empty = ungrouped
     tags: list[str] = Field(default_factory=list)
     enabled: bool = False
     interval_secs: int = 60          # 0 = only when scheduled or run by hand
+    active_hours: ActiveHours = Field(default_factory=ActiveHours)
     steps: list[Step] = Field(default_factory=list)
     condition: Condition = Field(default_factory=Condition)
     rearm: Rearm = Field(default_factory=Rearm)
@@ -230,6 +292,11 @@ class Alert(BaseModel):
         if not v:
             raise ValueError("an alert needs a name")
         return v
+
+    @field_validator("group")
+    @classmethod
+    def _group(cls, v: str) -> str:
+        return " ".join((v or "").split())
 
     @field_validator("interval_secs")
     @classmethod
