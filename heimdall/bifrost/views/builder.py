@@ -18,7 +18,7 @@ from heimdall.bifrost import common as c
 from heimdall.core import cron, hours
 from heimdall.core.conditions import describe, describe_delta
 from heimdall.core.kdb import build_q
-from heimdall.core.models import ALL_CLEAR_INTERVALS, ActiveHours, Alert, Condition, KdbStep, Rearm
+from heimdall.core.models import ALL_CLEAR_INTERVALS, ROW_TRIGGERS, ActiveHours, Alert, Condition, KdbStep, Rearm
 from heimdall.core.notify import ALL_CLEAR_FIELDS
 
 DRAFT, REV, LOADED, PREVIEW = "builder_draft", "builder_rev", "builder_loaded", "builder_preview"
@@ -636,6 +636,7 @@ def _notify(d: dict) -> None:
                                          placeholder="one address per line"))
     ch["subject"] = st.text_input("Subject", key=c.seed(K("n_subj"), ch.get("subject", "")),
                                   placeholder=f"[Heimdall] {d['name']}")
+    _rows_in_mail(d, ch)
     a, b, h = st.columns(3)
     ch["notify_on_error"] = a.toggle("Tell me when it keeps failing", key=c.seed(K("n_err"), ch.get("notify_on_error", False)))
     if ch["notify_on_error"]:
@@ -650,6 +651,29 @@ def _notify(d: dict) -> None:
         for dl in (res or {}).get("deliveries", []):
             (st.success if dl["ok"] else st.error)(f"{dl['channel']} → {dl['target']}"
                                                    + ("" if dl["ok"] else f": {dl['error']}"))
+
+
+ROWS_IN = {"body": "In the body", "attachment": "As a CSV attachment"}
+
+
+def _rows_in_mail(d: dict, ch: dict) -> None:
+    """Where a row-based trigger's rows go in the mail: in the body, or attached as a CSV."""
+    if d.get("condition", {}).get("type", "has_rows") not in ROW_TRIGGERS:
+        return
+    a, b = st.columns([2, 1])
+    ch["rows_in"] = a.radio("Rows in the mail", list(ROWS_IN), format_func=ROWS_IN.get, horizontal=True,
+                            key=c.seed(K("n_rows_in"), ch.get("rows_in", "body")),
+                            help="The rows that made the alert fire")
+    if ch["rows_in"] == "body":
+        ch["body_rows"] = int(b.number_input("How many rows", min_value=0, step=10,
+                                             key=c.seed(K("n_rows_n"), int(ch.get("body_rows", 20))),
+                                             help="0 = every row. A long table makes a long mail: "
+                                                  "the CSV attachment suits big results better."))
+        st.caption("All rows are shown." if ch["body_rows"] == 0 else
+                   f"The first {ch['body_rows']} row(s) are shown in the mail.")
+    else:
+        st.caption("Every row is attached as a .csv file that opens in Excel "
+                   "(up to 10 MB; beyond that, the first rows that fit).")
 
 
 def _all_clear(d: dict, ch: dict) -> None:

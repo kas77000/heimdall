@@ -248,6 +248,10 @@ class AllClear(BaseModel):
         return v
 
 
+# Triggers about rows: their mail can carry the rows, in the body or attached.
+ROW_TRIGGERS = ("has_rows", "row_count", "any_row", "all_rows")
+
+
 class Channels(BaseModel):
     email_to: list[str] = Field(default_factory=list)
     subject: str = ""                # empty = "[Heimdall] <alert name>"
@@ -255,6 +259,11 @@ class Channels(BaseModel):
     error_after: int = 3             # consecutive errors before an error notifies
     notify_on_recovery: bool = False
     all_clear: AllClear = Field(default_factory=AllClear)
+    # For a row-based trigger (ROW_TRIGGERS): where the firing's rows go in the mail.
+    # "body": the first ``body_rows`` rows (0 = all) in the mail itself.
+    # "attachment": every row, as a CSV file attached to the mail.
+    rows_in: Literal["body", "attachment"] = "body"
+    body_rows: int = Field(default=20, ge=0)
 
 
 HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")

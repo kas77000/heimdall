@@ -319,7 +319,13 @@ In **Builder**:
    `sym`) separately, and a new key notifies too. Once the alert clears, the
    next firing starts over.
 4. **Notify**: email addresses; optionally notify after N failures in a row,
-   and when it clears. **Also mail when all clear** sends the same people a
+   and when it clears. When the trigger is about rows (*any rows*, a row
+   count, *any* or *every row where…*), **Rows in the mail** chooses where the
+   rows that made it fire go: *In the body*, the first *How many rows* of them
+   (20 unless you change it; 0 = every row), or *As a CSV attachment*, every
+   row in a `.csv` file that opens in Excel (up to 10 MB; beyond that, the
+   first rows that fit, and the mail says so). **Send a test notification**
+   follows this choice. **Also mail when all clear** sends the same people a
    mail saying nothing is wrong: *With every check* (after each clean check),
    or once every 15 minutes, 30 minutes, 1, 2 or 4 hours, or a day, if that
    period had clean checks and none that fired or failed. A clean check is

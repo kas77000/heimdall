@@ -4,8 +4,10 @@ from __future__ import annotations
 import html
 import re
 import smtplib
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Callable, Optional
@@ -14,9 +16,10 @@ import pandas as pd
 
 from heimdall.core import conditions, cron
 from heimdall.core.evaluate import Evaluation
-from heimdall.core.models import Alert
+from heimdall.core.models import ROW_TRIGGERS, Alert
 
-TABLE_ROWS = 20
+TABLE_ROWS = 20                            # rows in the body unless the alert says otherwise
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024    # mail relays commonly refuse much bigger mails
 
 
 @dataclass
@@ -31,10 +34,18 @@ class SmtpSettings:
 
 
 @dataclass
+class Attachment:
+    filename: str
+    content: bytes
+    mime: str = "text/csv"
+
+
+@dataclass
 class Message:
     subject: str
     text: str
     html: str
+    attachments: list[Attachment] = field(default_factory=list)
 
 
 @dataclass
@@ -61,17 +72,51 @@ def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "") -> M
     else:
         lines.append("The condition is no longer met." if ev.status == "ok" else ev.message)
     table = ev.matching if ev.matching is not None and not ev.matching.empty else ev.judged
+    if kind != "trigger" or table is None or table.empty:
+        table = None
+    limit: Optional[int] = TABLE_ROWS
+    attachments: list[Attachment] = []
+    if table is not None and alert.condition.type in ROW_TRIGGERS:
+        if alert.channels.rows_in == "attachment":
+            att, note = _csv_attachment(alert, table)
+            attachments.append(att)
+            lines.append(note)
+            table = None                               # the rows are in the file, not the body
+        else:
+            limit = alert.channels.body_rows or None   # 0 = every row
     text = "\n".join(lines)
-    if kind == "trigger" and table is not None and not table.empty:
-        text += "\n\n" + table.head(TABLE_ROWS).to_string(index=False)
-        if len(table) > TABLE_ROWS:
-            text += f"\n… {len(table) - TABLE_ROWS} more row(s)"
+    if table is not None:
+        head = table if limit is None else table.head(limit)
+        text += "\n\n" + head.to_string(index=False)
+        if len(table) > len(head):
+            text += f"\n… {len(table) - len(head)} more row(s)"
     if bifrost_url:
         text += f"\n\nOpen in Bifrost: {bifrost_url}"
-    return Message(subject, text, _html(alert, ev, kind, label, lines, table, bifrost_url))
+    return Message(subject, text, _html(alert, ev, kind, label, lines, table, limit, bifrost_url),
+                   attachments)
 
 
-def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], url) -> str:
+def _csv_attachment(alert: Alert, table: pd.DataFrame) -> tuple[Attachment, str]:
+    """Every row as CSV (UTF-8 with a BOM, so Excel shows accents), and a line for the mail."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", alert.name).strip("_")[:60] or "alert"
+    filename = f"{name}_{stamp}.csv"
+    data = table.to_csv(index=False).encode("utf-8-sig")
+    if len(data) <= MAX_ATTACHMENT_BYTES:
+        return Attachment(filename, data), f"All {len(table)} row(s) are attached as {filename}."
+    # Too big for a mail: keep as many leading rows as fit.
+    keep = max(1, int(len(table) * MAX_ATTACHMENT_BYTES / len(data) * 0.95))
+    data = table.head(keep).to_csv(index=False).encode("utf-8-sig")
+    while len(data) > MAX_ATTACHMENT_BYTES and keep > 1:
+        keep = max(1, int(keep * 0.9))
+        data = table.head(keep).to_csv(index=False).encode("utf-8-sig")
+    mb = MAX_ATTACHMENT_BYTES // (1024 * 1024)
+    return (Attachment(filename, data),
+            f"The first {keep} of {len(table)} row(s) are attached as {filename} "
+            f"(a mail attachment is limited to {mb} MB); every row is in Bifrost.")
+
+
+def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], limit: Optional[int], url) -> str:
     colour = {"trigger": "#c62828", "error": "#ef6c00", "recovery": "#2e7d32"}[kind]
     parts = [f'<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1d2433">',
              f'<div style="border-left:4px solid {colour};padding:4px 12px;margin-bottom:12px">',
@@ -79,8 +124,8 @@ def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], url) -> 
              f'<div style="font-size:18px;font-weight:600">{html.escape(alert.name)}</div></div>']
     for line in lines[1:]:
         parts.append(f"<p style=\"margin:6px 0\">{html.escape(line)}</p>")
-    if kind == "trigger" and table is not None and not table.empty:
-        head = table.head(TABLE_ROWS)
+    if table is not None:
+        head = table if limit is None else table.head(limit)
         cells = "".join(f'<th style="text-align:left;padding:4px 10px;border-bottom:1px solid #ccd">{html.escape(str(c))}</th>'
                         for c in head.columns)
         body = "".join("<tr>" + "".join(
@@ -88,8 +133,8 @@ def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], url) -> 
             for v in row) + "</tr>" for row in head.itertuples(index=False))
         parts.append(f'<table style="border-collapse:collapse;margin-top:10px">'
                      f"<thead><tr>{cells}</tr></thead><tbody>{body}</tbody></table>")
-        if len(table) > TABLE_ROWS:
-            parts.append(f'<p style="color:#667">… {len(table) - TABLE_ROWS} more row(s)</p>')
+        if len(table) > len(head):
+            parts.append(f'<p style="color:#667">… {len(table) - len(head)} more row(s)</p>')
     if url:
         parts.append(f'<p style="margin-top:14px"><a href="{html.escape(url)}">Open in Bifrost</a></p>')
     parts.append("</div>")
@@ -144,10 +189,21 @@ def compose_all_clear(alert: Alert, *, checks: int, since: datetime, until: date
 def send_email(smtp: SmtpSettings, to: list[str], msg: Message) -> None:
     if not smtp.configured:
         raise RuntimeError("SMTP is not configured (Settings → Email)")
-    mime = MIMEMultipart("alternative")
+    body = MIMEMultipart("alternative")
+    body.attach(MIMEText(msg.text, "plain", "utf-8"))
+    body.attach(MIMEText(msg.html, "html", "utf-8"))
+    if msg.attachments:
+        mime = MIMEMultipart("mixed")
+        mime.attach(body)
+        for att in msg.attachments:
+            part = MIMEBase(*att.mime.split("/", 1))
+            part.set_payload(att.content)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=att.filename)
+            mime.attach(part)
+    else:
+        mime = body
     mime["Subject"], mime["From"], mime["To"] = msg.subject, smtp.sender, ", ".join(to)
-    mime.attach(MIMEText(msg.text, "plain", "utf-8"))
-    mime.attach(MIMEText(msg.html, "html", "utf-8"))
     # The company mail relay: no login and no TLS, as KdbMonitor sends.
     with smtplib.SMTP(smtp.host, smtp.port, timeout=30) as s:
         s.sendmail(smtp.sender, to, mime.as_string())

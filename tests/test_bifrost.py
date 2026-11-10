@@ -196,3 +196,33 @@ def test_alerts_page_moves_and_manages_groups(wired, store):
     next(b for b in at.button if b.key == "grp_ren_Equities").click().run()
     assert not at.exception
     assert store.alert(a.id).group == "Stocks"
+
+
+def test_builder_chooses_rows_in_the_body_or_attached(wired, store):
+    alert, at = _open_builder(store, "Market-data feed")          # trigger: any row where …
+    at.segmented_control[0].set_value("Notify").run()
+    rows_in = next(r for r in at.radio if r.label == "Rows in the mail")
+    assert rows_in.value == "body"
+    next(n for n in at.number_input if n.label == "How many rows").set_value(50).run()
+    assert any("first 50 row(s)" in c.value for c in at.caption)
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    assert (store.alert(alert.id).channels.rows_in, store.alert(alert.id).channels.body_rows) == ("body", 50)
+
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    next(r for r in at.radio if r.label == "Rows in the mail").set_value("attachment").run()
+    assert not [n for n in at.number_input if n.label == "How many rows"]
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    assert store.alert(alert.id).channels.rows_in == "attachment"
+
+
+def test_builder_hides_the_rows_choice_for_triggers_not_about_rows(wired, store):
+    from heimdall.core.models import Condition
+    alert = next(a for a in store.alerts() if a.name.startswith("Market-data feed"))
+    store.save_alert(alert.model_copy(update={"condition": Condition(type="aggregate", column="lag_secs")}))
+    _, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    assert not at.exception, at.exception
+    assert not [r for r in at.radio if r.label == "Rows in the mail"]
