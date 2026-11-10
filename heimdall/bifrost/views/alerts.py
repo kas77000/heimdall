@@ -11,6 +11,10 @@ from heimdall.core import hours
 from heimdall.core.models import ActiveHours
 from heimdall.bifrost.views.overview import go
 
+# Tag chips in the table: the theme's primary violet (.streamlit/config.toml), the colour
+# of the chips in the Builder's tag input ("primary" would be drawn faded here).
+TAG_COLOUR = "#7765ea"
+
 
 def render() -> None:
     head = st.columns([4, 1], vertical_alignment="bottom")
@@ -49,17 +53,18 @@ def render() -> None:
         "On": a["enabled"],
         "Group": a.get("group") or "",
         "Alert": a["name"],
-        "Steps": " → ".join(f"{s['name']}" for s in a["steps"]),
         "Checks": c.every(a["interval_secs"]),
         "Hours": hours.describe(ActiveHours(**a["active_hours"])) if a.get("active_hours") else "Any time",
         "Owner": a.get("owner", ""),
-        "Tags": ", ".join(a.get("tags", [])),
+        "Tags": list(a.get("tags", [])),
         "Changed": c.local(a.get("updated_at"), "%Y-%m-%d %H:%M"),
     } for a in shown])
     event = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun",
                          selection_mode="multi-row", key="alerts_table",
                          column_config={"On": st.column_config.CheckboxColumn(width="small"),
-                                        "Steps": st.column_config.TextColumn(width="large")})
+                                        # each tag a chip, as typed in the Builder
+                                        "Tags": st.column_config.MultiselectColumn(
+                                            options=tags, color=TAG_COLOUR, width="medium")})
     rows = [shown[i] for i in (event.selection.rows if event and event.selection else [])]
     if not rows:
         st.caption(f"{len(shown)} of {len(alerts)} alert(s). Select one or more to act on them.")
