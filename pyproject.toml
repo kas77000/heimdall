@@ -32,7 +32,7 @@ heimdall = "heimdall.__main__:main"
 include = ["heimdall*"]
 
 [tool.setuptools.package-data]
-"heimdall.gjallarhorn" = ["app/*.ps1", "app/*.txt", "app/sounds/*.wav"]
+"heimdall.gjallarhorn" = ["app/*.ps1", "app/*.cmd", "app/*.txt", "app/sounds/*.wav"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,11 +4,25 @@ GJALLARHORN - Heimdall's alerts on a trader's screen
 Nothing to install: Windows PowerShell and WPF are part of Windows.
 
 Set it up on a trader's PC (once, as that trader, no admin rights):
+double-click install-gjallarhorn.cmd in this folder. It asks for
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File "<this folder>\install-gjallarhorn.ps1" -Desk "Equities"
+  * the shared folder Heimdall writes the alerts to: the one in Bifrost,
+    Settings > Gjallarhorn (Enter keeps the folder this app folder is in), and
+  * the desks this PC is for, comma separated. An alert pops up when it is
+    meant for everyone, for this Windows user name, or for one of these desks.
 
-  -Desk: the desks this PC is for, comma separated. An alert pops up when it
-  is meant for everyone, for this Windows user name, or for one of these desks.
+Or in one line, without the questions:
+
+    "\\server\share\Gjallarhorn\app\install-gjallarhorn.cmd" "\\server\share\Gjallarhorn" "Equities,Rates"
+
+Gjallarhorn then starts at every logon. The other command files here:
+
+    start-gjallarhorn.cmd       start it now (after it was stopped)
+    stop-gjallarhorn.cmd        quit it now; it starts again at the next logon
+    uninstall-gjallarhorn.cmd   quit it and stop it starting at logon
+                                (install-gjallarhorn.cmd puts it back)
+
+Run install-gjallarhorn.cmd again to change the folder or the desks.
 
 What the trader gets:
   * one card at the bottom right, never a stack: it shows the most serious
@@ -29,8 +43,7 @@ What the trader gets:
 An acknowledgement is written to the share; Heimdall records who and when, and
 the alert leaves every other trader's card too.
 
-Remove it:  install-gjallarhorn.ps1 -Uninstall
-Its log:    %LOCALAPPDATA%\Gjallarhorn\gjallarhorn.log
+Its log:    %LOCALAPPDATA%\Gjallarhorn\gjallarhorn.log (each start says which folder it reads)
 
 This folder is published from Bifrost (Settings > Gjallarhorn). Publishing a
 new version updates everyone at their next logon, or when they press Restart.

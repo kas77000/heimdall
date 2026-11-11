@@ -35,6 +35,7 @@ MAX_ROWS = 500              # rows a pop-up's details carry; the count says how 
 MAX_CELL = 300              # characters per cell
 APP_DIR = Path(__file__).with_name("app")
 APP_FILES = ("gjallarhorn.ps1", "install-gjallarhorn.ps1", "README.txt",
+             "install-gjallarhorn.cmd", "start-gjallarhorn.cmd", "stop-gjallarhorn.cmd", "uninstall-gjallarhorn.cmd",
              "sounds/horn-info.wav", "sounds/horn-warning.wav", "sounds/horn-critical.wav")
 DEFAULT_SOUNDS = {"info": "horn:info", "warning": "horn:warning", "critical": "horn:critical"}
 MAX_SOUND_BYTES = 2 * 1024 * 1024
@@ -301,9 +302,9 @@ def sound_bytes(settings: Settings, sound: str) -> Optional[bytes]:
 
 
 def install_command(settings: Settings) -> str:
-    app = str(Path(settings.root) / "app" / "install-gjallarhorn.ps1") if settings.configured else \
-        r"\\server\share\Gjallarhorn\app\install-gjallarhorn.ps1"
-    return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{app}" -Desk "Equities"'
+    """What a trader runs once: the .cmd on the share, given the folder and the desks."""
+    root = settings.root.rstrip("\\/") if settings.configured else r"\\server\share\Gjallarhorn"
+    return f'"{root}\\app\\install-gjallarhorn.cmd" "{root}" "Equities"'
 
 
 def status(settings: Settings, now: Optional[datetime] = None) -> dict:

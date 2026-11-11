@@ -85,7 +85,7 @@ def test_clean_removes_old_days_and_acknowledgements(tmp_path):
 
 
 def test_deploy_copies_the_ascii_app():
-    for name in (n for n in gjallarhorn.APP_FILES if n.endswith((".ps1", ".txt"))):
+    for name in (n for n in gjallarhorn.APP_FILES if n.endswith((".ps1", ".cmd", ".txt"))):
         text = (gjallarhorn.APP_DIR / name).read_bytes()
         assert all(b < 128 for b in text), f"{name} must stay ASCII: Windows PowerShell reads it in the local code page"
 
@@ -159,7 +159,7 @@ def test_the_api_tests_and_publishes(store, engine, share, huginn):
     data = huginn.post("/gjallarhorn/test", {"audience": ["Rates"], "severity": "critical"})
     assert data["kind"] == "test" and data["audience"] == ["Rates"]
     r = huginn.post("/gjallarhorn/deploy", {})
-    assert set(r["copied"]) == set(gjallarhorn.APP_FILES) and "install-gjallarhorn.ps1" in r["install"]
+    assert set(r["copied"]) == set(gjallarhorn.APP_FILES) and "install-gjallarhorn.cmd" in r["install"]
     status = huginn.get("/gjallarhorn")
     assert status["reachable"] and status["app_published"] and status["today"] == 1
     assert huginn.get("/settings")["gjallarhorn"]["root"] == str(share)

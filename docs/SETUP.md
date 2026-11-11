@@ -387,17 +387,31 @@ writes acknowledgements back.
 3. **Send a test pop-up**: pick its severity (you hear its sound), and send it
    to every trader or to chosen desks or Windows user names (the ones your
    alerts use are offered; type any other).
-4. **On each trader's PC**, once, as that trader (no admin rights), the
-   command Bifrost shows:
+4. **On each trader's PC**, once, as that trader (no admin rights):
+   double-click `install-gjallarhorn.cmd` in the folder's `app` subfolder. It
+   asks for the shared folder (the one set in step 1; Enter keeps the folder
+   the `app` folder is in) and the desks that PC is for, comma separated. Or
+   in one line, as Bifrost shows it:
 
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File "\\fileserver\share\Heimdall\Gjallarhorn\app\install-gjallarhorn.ps1" -Desk "Equities"
+   ```bat
+   "\\fileserver\share\Heimdall\Gjallarhorn\app\install-gjallarhorn.cmd" "\\fileserver\share\Heimdall\Gjallarhorn" "Equities,Rates"
    ```
 
-   `-Desk` lists the desks that PC is for, comma separated. It adds a
-   scheduled task that starts Gjallarhorn at every logon, and a *Gjallarhorn*
-   entry in the Start menu, with its horn icon. A sample pop-up shows when it is done.
-   `-Uninstall` removes both.
+   It checks the folder can be reached, adds a scheduled task that starts
+   Gjallarhorn at every logon, and a *Gjallarhorn* entry in the Start menu,
+   with its horn icon. A sample pop-up shows when it is done. Run it again to
+   change the folder or the desks. Next to it:
+
+   | File | What it does |
+   |---|---|
+   | `start-gjallarhorn.cmd` | starts it now, after it was stopped |
+   | `stop-gjallarhorn.cmd` | quits it now; it starts again at the next logon |
+   | `uninstall-gjallarhorn.cmd` | quits it and stops it starting at logon (removes the task and the Start menu entry) |
+
+   There is no other setting on the trader's side: Gjallarhorn reads the
+   folder it was installed with. If a test pop-up does not show, open
+   `%LOCALAPPDATA%\Gjallarhorn\gjallarhorn.log`: each start says which
+   folder and desks it uses.
 
 **Severity and sound** belong to the alert (Notify, at the top):
 

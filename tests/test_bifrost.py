@@ -212,7 +212,7 @@ def test_settings_gjallarhorn(wired, store, tmp_path):
     second = [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / "gj" / "alerts").rglob("*.json")
               if p != sent][0]
     assert (second["severity"], second["audience"], second["sound"]) == ("critical", ["Equities", "jdoe"], "horn:critical")
-    assert any("install-gjallarhorn.ps1" in c.value for c in at.code)
+    assert any("install-gjallarhorn.cmd" in c.value for c in at.code)
     at.selectbox(key="gj_snd_info").set_value("none").run()
     _button(at, "Save sounds").click().run()
     assert not at.exception, at.exception

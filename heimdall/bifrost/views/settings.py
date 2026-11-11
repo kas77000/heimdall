@@ -244,10 +244,14 @@ def _gjallarhorn() -> None:
         st.markdown("**2. Send a test pop-up**")
         _test_pop_up()
     _sounds(g)
-    st.markdown("**3. On each trader's PC**, once, as that trader (no admin rights):")
-    st.code(status.get("install", ""), language="powershell")
-    st.caption("`-Desk`: the desks that PC is for, comma separated. An alert pops up when it is for everyone, "
-               "for that Windows user name, or for one of those desks. `-Uninstall` removes it.")
+    st.markdown("**3. On each trader's PC**, once, as that trader (no admin rights): double-click "
+                "`install-gjallarhorn.cmd` in the folder's `app` subfolder (it asks for the folder and the desks), "
+                "or run:")
+    st.code(status.get("install", ""), language="bat")
+    st.caption("The second value is the desks that PC is for, comma separated: an alert pops up when it is for "
+               "everyone, for that Windows user name, or for one of those desks. Gjallarhorn then starts at every "
+               "logon. Next to it: `start-gjallarhorn.cmd`, `stop-gjallarhorn.cmd` (until the next logon) and "
+               "`uninstall-gjallarhorn.cmd` (stops it starting at logon).")
 
 
 TEST_SEVERITIES = {"info": "Info", "warning": "Warning", "critical": "Critical"}
