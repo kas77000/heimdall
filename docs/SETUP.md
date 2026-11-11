@@ -112,7 +112,7 @@ Open:
 
 The demo data lives in the same database as everything else. Delete the demo
 alerts and connections in Bifrost when you no longer want them, or start from
-an empty database (section 13).
+an empty database (section 14).
 
 ## 5. Configure
 
@@ -358,10 +358,94 @@ onto an existing group merges the two), dissolves it (its alerts stay, without
 a group), or switches every alert in it on or off.
 
 Alerts can be exported (Alerts → select → Export, or Settings → Import /
-export) and imported elsewhere (section 13). Imported alerts arrive switched
+export) and imported elsewhere (section 14). Imported alerts arrive switched
 off.
 
-## 10. Schedules
+## 10. Gjallarhorn: pop-ups on traders' screens
+
+Traders do not need Bifrost, Python or anything installed. Gjallarhorn is a
+small Windows app (Windows PowerShell and WPF, both part of Windows) that runs
+on each trader's PC, reads the alerts Huginn writes to a shared folder, and
+writes acknowledgements back.
+
+```
+\\fileserver\share\Heimdall\Gjallarhorn\
+  alerts\<YYYY-MM-DD>\<run id>.json   one per firing, written by Huginn
+  acks\<run id>\<user>.json           one per acknowledgement, written by the traders' app
+  app\                                the trader app (and its horn sounds), published from Bifrost
+  sounds\<name>.wav                   sounds uploaded from Bifrost
+```
+
+**Set it up once**, in Bifrost, Settings → Gjallarhorn:
+
+1. **Shared folder**: a folder every trader can read and write, and that the
+   account Huginn runs under can read and write too. **Keep alerts (days)**:
+   older files are removed by Huginn every hour (default 7).
+2. **Publish the app**: copies Gjallarhorn into the folder's `app` subfolder.
+   Publish again after an upgrade: traders get the new version at their next
+   logon, or when they press Restart.
+3. **Send a test**: a test pop-up for everyone, or for some desks or Windows
+   user names.
+4. **On each trader's PC**, once, as that trader (no admin rights), the
+   command Bifrost shows:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File "\\fileserver\share\Heimdall\Gjallarhorn\app\install-gjallarhorn.ps1" -Desk "Equities"
+   ```
+
+   `-Desk` lists the desks that PC is for, comma separated. It adds a
+   scheduled task that starts Gjallarhorn at every logon, and a *Gjallarhorn*
+   entry in the Start menu, with its horn icon. A sample pop-up shows when it is done.
+   `-Uninstall` removes both.
+
+**Severity and sound** belong to the alert (Notify, at the top):
+
+- **Severity**: *Info*, *Warning* or *Critical*. It shows in Overview and
+  Alerts (a column, and a filter), starts a firing's email subject
+  (`[CRITICAL] [Heimdall] Price outside limits: TRIGGERED`), and sets how a
+  pop-up behaves: *Info* fades after a few seconds, *Warning* after 25 seconds
+  unless the trader is reading it, *Critical* stays until the trader acts on it.
+- **Sound**: what Gjallarhorn plays when the pop-up comes. By default, the
+  severity's horn: Gjallarhorn's horn calls grow more urgent with the
+  severity (one soft call, two blasts, three blasts with the last one held).
+  An alert can pick another horn, a Windows sound, a sound uploaded to the
+  share, or silence. Bifrost plays the horns and uploaded sounds so you can
+  hear them while choosing.
+
+Settings → Gjallarhorn → **Sounds** sets the default sound of each severity
+and takes your own `.wav` files (up to 2 MB; WAV because it plays on every
+Windows PC without anything installed). Traders can turn sounds off for
+themselves from the icon's menu.
+
+**On an alert**, Notify → *Pop up on traders' screens*:
+
+- **For**: desks or Windows user names; empty means every trader.
+- **Also a short pop-up when it clears**: an information pop-up, nothing to
+  acknowledge. It does not mail unless *Tell me when it clears* is on.
+
+The re-arm policy decides when a pop-up is written, exactly as for email.
+
+**What the trader sees**: one card at the bottom right, never a stack. It
+shows the most serious alert first, with "1 of 4" and arrows to step through
+the others. *Acknowledge* moves on to the next, *Details* opens the list, and
+the cross hides the card (the alerts stay in the list). The icon by the clock
+shows how many alerts wait to be acknowledged; clicking it opens the list:
+Previous / Next, every row (the first 500), *Copy rows* for Excel,
+*Acknowledge all*, *Pause pop-ups for 1 hour*. Closing the list only
+minimizes it; *Quit* (in the list or the icon's menu, after a confirmation)
+stops Gjallarhorn and *Restart* starts it again from the share.
+
+**Acknowledgements**: the first trader to acknowledge closes the alert on
+every other trader's screen. Huginn reads the share every 10 seconds and
+records it on the run (History shows *jdoe (Gjallarhorn)*). Acknowledging in
+Bifrost closes the traders' pop-ups too.
+
+If the share cannot be reached, the firing is still recorded and the delivery
+shows the error in History. On the trader's side the icon turns grey, nothing
+is lost, and it carries on when the share is back. Its log is
+`%LOCALAPPDATA%\Gjallarhorn\gjallarhorn.log`.
+
+## 11. Schedules
 
 In **Schedules**, pick an alert and what to do (switch on, switch off, or run
 it), then either days and a time or a raw five-field cron expression, in a time
@@ -372,7 +456,7 @@ Sleipnir must be running for schedules to happen. After downtime it applies
 only the most recent missed switch on or off, and skips a run that is more
 than `run_grace_secs` late, noting it in History → Changes.
 
-## 11. History and cleanup
+## 12. History and cleanup
 
 - **History → Runs**: every check, filterable by alert, status and period, with
   each step's request, the judged table (first `snapshot_rows` rows) and every
@@ -386,7 +470,7 @@ than `run_grace_secs` late, noting it in History → Changes.
 - **Clean up automatically**: set the age and/or count limits and Huginn
   applies them every hour.
 
-## 12. Keep it running (Windows)
+## 13. Keep it running (Windows)
 
 Heimdall should start with the machine and come back if it stops. Task
 Scheduler is built into Windows and is enough, with one scheduled task that runs
@@ -463,7 +547,7 @@ To host Heimdall on a desktop PC instead of a server, for colleagues to use from
 their browsers, see [LOCAL-HOSTING.md](LOCAL-HOSTING.md): its script does all of
 this for you.
 
-## 13. Back up, move, upgrade
+## 14. Back up, move, upgrade
 
 **Back up.** Everything is in the SQLite file (`muninn.path`). Copy it while
 Huginn is stopped, or use SQLite's online backup, which is safe while Huginn
@@ -506,7 +590,7 @@ git pull
 then restart Huginn, Sleipnir and Bifrost. The database tables are created
 if missing, so a newer Heimdall opens an older database.
 
-## 14. Check that it works
+## 15. Check that it works
 
 ```powershell
 .venv\Scripts\python -m pytest                 # everything, about a minute
@@ -528,7 +612,7 @@ On a running system:
 - Settings → Connections → **Test** on each connection.
 - Builder → Notify → **Send a test notification**.
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|

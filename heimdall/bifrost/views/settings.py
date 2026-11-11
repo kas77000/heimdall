@@ -1,4 +1,4 @@
-"""Settings: connections, the script registry, email, and moving alerts between installs."""
+"""Settings: connections, the script registry, email, Gjallarhorn, and moving alerts between installs."""
 from __future__ import annotations
 
 import json
@@ -14,9 +14,9 @@ OUTPUTS = {"json": "JSON (records, an object or a value)", "csv": "CSV with a he
 
 def render() -> None:
     c.page_header("Settings")
-    view = st.segmented_control("Section", ["Connections", "Scripts", "Email", "Import / export"],
+    view = st.segmented_control("Section", ["Connections", "Scripts", "Email", "Gjallarhorn", "Import / export"],
                                 default="Connections", key="set_view", label_visibility="collapsed")
-    {"Connections": _connections, "Scripts": _scripts, "Email": _email,
+    {"Connections": _connections, "Scripts": _scripts, "Email": _email, "Gjallarhorn": _gjallarhorn,
      "Import / export": _bundles}.get(view or "Connections", _connections)()
 
 
@@ -198,6 +198,106 @@ def _email() -> None:
             if c.call(lambda: c.huginn().put("/settings", {"smtp": {"host": host.strip(), "port": int(port),
                                                                     "sender": sender.strip()}})):
                 st.toast("Email settings saved", icon=":material/check:")
+
+
+# -- gjallarhorn ------------------------------------------------------------------
+
+def _gjallarhorn() -> None:
+    settings = c.call(lambda: c.huginn().get("/settings"))
+    if settings is None:
+        return
+    g = settings.get("gjallarhorn") or {}
+    st.caption("Pop-ups on traders' screens. Huginn writes each alert to a folder on the shared drive; "
+               "the Gjallarhorn app on each trader's PC (Windows PowerShell, nothing to install) shows it and "
+               "writes acknowledgements back. Huginn's account needs to read and write this folder.")
+    with st.form("gjallarhorn", border=True):
+        a, b = st.columns([3, 1])
+        root = a.text_input("Shared folder", value=g.get("root", ""),
+                            placeholder=r"\\fileserver\share\Heimdall\Gjallarhorn")
+        keep = b.number_input("Keep alerts (days)", min_value=1, max_value=90, value=int(g.get("keep_days") or 7),
+                              help="Older alert files and acknowledgements are removed from the folder")
+        if st.form_submit_button("Save", type="primary", icon=":material/save:"):
+            if c.call(lambda: c.huginn().put("/settings", {"gjallarhorn": g | {"root": root.strip(),
+                                                                              "keep_days": int(keep)}})):
+                st.toast("Gjallarhorn settings saved", icon=":material/check:")
+                st.rerun()
+    status = c.call(lambda: c.huginn().get("/gjallarhorn"))
+    if not status or not status.get("configured"):
+        st.info("Set the shared folder first.", icon=":material/folder_shared:")
+        return
+    if not status.get("reachable"):
+        st.warning(f"Huginn cannot reach {status['root']}. Check the path and that Huginn's account can write there.",
+                   icon=":material/folder_off:")
+    else:
+        st.caption(f":material/check_circle: Reachable · {status['today']} alert(s) written today · app "
+                   + ("published" if status.get("app_published") else "**not published yet**"))
+    a, b = st.columns(2)
+    with a.container(border=True):
+        st.markdown("**1. Publish the app to the share**")
+        st.caption("Copies Gjallarhorn into the folder's `app` subfolder. Publishing again updates every trader "
+                   "at their next logon (or when they press Restart).")
+        if st.button("Publish the app", icon=":material/upload:", key="gj_deploy"):
+            r = c.call(lambda: c.huginn().post("/gjallarhorn/deploy", {}))
+            if r:
+                st.toast(f"Published {len(r['copied'])} file(s)", icon=":material/check:")
+    with b.container(border=True):
+        st.markdown("**2. Send a test pop-up**")
+        aud = st.text_input("To", key="gj_test_to", placeholder="Everyone, or desks / Windows user names, comma separated")
+        sev = st.segmented_control("Severity", ["info", "warning", "critical"], default="warning", key="gj_test_sev")
+        if st.button("Send a test", icon=":material/notifications_active:", key="gj_test"):
+            who = [x.strip() for x in aud.split(",") if x.strip()]
+            if c.call(lambda: c.huginn().post("/gjallarhorn/test", {"audience": who, "severity": sev or "warning"})):
+                st.toast("Test pop-up written to the share", icon=":material/check:")
+    _sounds(g)
+    st.markdown("**3. On each trader's PC**, once, as that trader (no admin rights):")
+    st.code(status.get("install", ""), language="powershell")
+    st.caption("`-Desk`: the desks that PC is for, comma separated. An alert pops up when it is for everyone, "
+               "for that Windows user name, or for one of those desks. `-Uninstall` removes it.")
+
+
+def _sounds(g: dict) -> None:
+    """The horn each severity sounds by default, and sounds of your own."""
+    from heimdall.bifrost.views.builder import SOUNDS
+    info = c.call(lambda: c.huginn().get("/gjallarhorn/sounds")) or {}
+    files = info.get("files", [])
+    choices = {k: v for k, v in SOUNDS.items() if k} | {f["sound"]: f"Uploaded: {f['name']}" for f in files}
+    defaults = info.get("defaults", {})
+    with st.container(border=True):
+        st.markdown("**Sounds**")
+        st.caption("What each severity sounds like on traders' screens, unless an alert picks its own sound. "
+                   "Gjallarhorn's horns grow more urgent with the severity.")
+        picked = {}
+        cols = st.columns(3)
+        for col, sev in zip(cols, ("info", "warning", "critical")):
+            cur = defaults.get(sev, f"horn:{sev}")
+            picked[sev] = col.selectbox(sev.capitalize(), list(choices), format_func=choices.get,
+                                        index=list(choices).index(cur) if cur in choices else 0, key=f"gj_snd_{sev}")
+            if picked[sev].startswith(("horn:", "file:")):
+                data = c.call(lambda s=picked[sev]: c.huginn().get_bytes("/gjallarhorn/sound", sound=s), quiet=True)
+                if data:
+                    col.audio(data, format="audio/wav")
+        if st.button("Save sounds", icon=":material/volume_up:", key="gj_snd_save"):
+            if c.call(lambda: c.huginn().put("/settings", {"gjallarhorn": g | {"sounds": picked}})):
+                st.toast("Sounds saved", icon=":material/check:")
+        st.markdown("Your own sounds")
+        up = st.file_uploader("Add a .wav", type=["wav"], key="gj_snd_up",
+                              help="WAV only: it plays on every Windows PC without anything installed. Up to 2 MB.")
+        if up is not None and st.button("Upload", icon=":material/upload:", key="gj_snd_upload"):
+            import base64
+            r = c.call(lambda: c.huginn().post("/gjallarhorn/sounds",
+                                               {"name": up.name, "data": base64.b64encode(up.getvalue()).decode()}))
+            if r:
+                st.toast(f"Added {r['sound'][5:]}", icon=":material/check:")
+                st.rerun()
+        for f in files:
+            r = st.columns([3, 4, 1], vertical_alignment="center")
+            r[0].markdown(f":material/music_note: {f['name']}")
+            data = c.call(lambda f=f: c.huginn().get_bytes("/gjallarhorn/sound", sound=f["sound"]), quiet=True)
+            if data:
+                r[1].audio(data, format="audio/wav")
+            if r[2].button("", icon=":material/delete:", key=f"gj_snd_del_{f['name']}", help="Remove this sound"):
+                c.call(lambda f=f: c.huginn().delete(f"/gjallarhorn/sounds/{f['name']}"))
+                st.rerun()
 
 
 # -- import / export --------------------------------------------------------------

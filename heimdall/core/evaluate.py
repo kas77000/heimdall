@@ -90,11 +90,13 @@ def evaluate_alert(alert: Alert, res: Resources, state: AlertState, now: datetim
             moved = conditions.moves(rearm, state.delta_ref, delta_value)
             triggered = bool(moved)
     notify = None
+    g = alert.channels.gjallarhorn
+    wants_recovery = alert.channels.notify_on_recovery or (g.enabled and g.on_recovery)
     if not dry_run:
         if conditions.should_notify(state.last_triggered, state.last_notified_at,
                                     triggered, alert.rearm, now):
             notify = "trigger"
-        elif (not met and alert.channels.notify_on_recovery
+        elif (not met and wants_recovery
               and (state.last_triggered or state.last_status == "triggered")):
             notify = "recovery"
         elif (not met and alert.channels.notify_on_recovery and alert.channels.notify_on_error

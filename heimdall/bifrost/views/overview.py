@@ -120,6 +120,7 @@ def _alerts_table(alerts: list[dict], key: str) -> None:
     rows = sorted(alerts, key=lambda a: (ORDER.get(a["_status"], 9), a["name"].lower()))
     df = pd.DataFrame([{
         "Status": DOT[a["_status"]],
+        "Severity": {"critical": "Critical", "warning": "Warning", "info": "Info"}.get(a.get("severity", "warning"), ""),
         "Alert": a["name"],
         "Sources": " · ".join(c.KIND[k][0] for k in a["kinds"]),
         "Checks": c.every(a["interval_secs"]) if a["enabled"] else "Disabled",

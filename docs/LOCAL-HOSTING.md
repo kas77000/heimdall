@@ -340,7 +340,7 @@ part). That is a good second copy, though it does not include run history.
 | Bifrost says **Huginn is not answering** | Huginn stopped; read `data\logs\huginn.log`. With the task from section 7, everything restarts within about a minute. |
 | Sidebar shows **Sleipnir not seen** | Sleipnir stopped or cannot reach Huginn; read `data\logs\sleipnir.log`. |
 
-Everything else is in [SETUP.md §15](SETUP.md#15-troubleshooting).
+Everything else is in [SETUP.md §16](SETUP.md#16-troubleshooting).
 
 ## 13. Moving to a server later
 
@@ -352,7 +352,7 @@ When a server is available:
    connections and schedules all come with it.
 3. On the server, set `[bifrost] url` to the server's address, set
    `HEIMDALL_TOKEN` if Huginn will listen on the network, and start Heimdall as
-   in [SETUP.md §12](SETUP.md#12-keep-it-running-windows).
+   in [SETUP.md §13](SETUP.md#13-keep-it-running-windows).
 4. Check that the server can reach the same KDB hosts, B-PIPE and SMTP, and
    that any registered scripts exist at the same paths.
 5. Send everyone the new link, then remove the task on your PC (section 7)

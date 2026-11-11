@@ -11,6 +11,7 @@ whether or not anyone has a browser open. Dashboards stay in KdbMonitor.
 | **Muninn** | The store Huginn owns (SQLite): alert definitions, connections, the script registry, schedules, and the history of every run, notification and change. |
 | **Sleipnir** | The scheduler: switches alerts on and off, or runs them, at cron times in each schedule's own time zone. |
 | **Bifrost** | The Streamlit app (always dark) where alerts are built, watched, and their history read and cleaned up. |
+| **Gjallarhorn** | Pop-ups on traders' screens: a small Windows app (PowerShell and WPF, nothing to install) that reads the alerts Huginn writes to a shared folder and writes acknowledgements back. |
 
 In the myth, Heimdall keeps watch over Bifrost, Huginn ("thought") and
 Muninn ("memory") are the ravens that fly out each day and report back, and
@@ -102,6 +103,22 @@ placeholders. There is no shell, and every parameter stays one argument, so an
 alert, including one imported from someone else, cannot run anything that was
 not registered. A script can also receive an earlier step's table on stdin as
 JSON records. See `examples/scripts/` for three small ones.
+
+## Gjallarhorn: alerts on traders' screens
+
+Traders do not need Bifrost. Every alert has a **severity** (info, warning,
+critical: shown in Overview and Alerts, and at the start of a firing's email
+subject) and a **sound**, by default a horn call that grows more urgent with the
+severity. An alert with **Pop up on traders' screens** on (for every trader or
+some desks / Windows user names) makes Huginn write one file per firing to a shared folder. Gjallarhorn,
+running on each trader's PC, shows one card at the bottom right (never a stack:
+"1 of 4" and arrows), keeps every alert waiting to be acknowledged in a list
+with its rows, and writes acknowledgements back to the share; Huginn records
+who acknowledged on the run. Acknowledging in Bifrost closes the pop-ups too.
+
+Set up in Bifrost, Settings → Gjallarhorn: the shared folder, *Publish the
+app*, *Send a test*, and the one command to run on each trader's PC. See
+[docs/SETUP.md](docs/SETUP.md), section 10.
 
 ## History
 

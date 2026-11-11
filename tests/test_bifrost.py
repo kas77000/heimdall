@@ -155,6 +155,56 @@ def test_builder_active_hours_and_all_clear_are_saved(wired, store):
     assert saved.group == "Market data"
 
 
+def test_builder_sends_pop_ups_to_some_desks(wired, store):
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    next(t for t in at.toggle if t.label == "Pop up on traders' screens (Gjallarhorn)").set_value(True).run()
+    assert not at.exception, at.exception
+    at.segmented_control(key=next(s.key for s in at.segmented_control if s.label == "Severity")).set_value("critical").run()
+    next(m for m in at.multiselect if m.label == "For").set_value(["Equities", "jdoe"]).run()
+    assert any("Stays on screen" in c.value for c in at.caption)
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    saved = store.alert(alert.id)
+    g = saved.channels.gjallarhorn
+    assert (g.enabled, saved.severity, g.audience) == (True, "critical", ["Equities", "jdoe"])
+
+
+def test_builder_picks_a_sound_and_plays_it(wired, store, tmp_path):
+    store.set_settings({"gjallarhorn": {"root": str(tmp_path / "gj")}})
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    sound = next(s for s in at.selectbox if s.label == "Sound")
+    assert sound.value == ""                                   # the severity's horn
+    assert at.get("audio"), "the default horn can be heard"
+    sound.set_value("horn:critical").run()
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    assert store.alert(alert.id).sound == "horn:critical"
+
+
+def test_settings_gjallarhorn(wired, store, tmp_path):
+    at = _page("settings").run()
+    at.segmented_control(key="set_view").set_value("Gjallarhorn").run()
+    assert not at.exception, at.exception
+    assert any("Set the shared folder first" in i.value for i in at.info)
+    next(t for t in at.text_input if t.label == "Shared folder").set_value(str(tmp_path / "gj"))
+    _button(at, "Save").click().run()
+    assert not at.exception, at.exception
+    assert store.get_setting("gjallarhorn")["root"] == str(tmp_path / "gj")
+    _button(at, "Publish the app").click().run()
+    assert (tmp_path / "gj" / "app" / "gjallarhorn.ps1").is_file()
+    _button(at, "Send a test").click().run()
+    assert not at.exception, at.exception
+    assert list((tmp_path / "gj" / "alerts").rglob("*.json"))
+    assert any("install-gjallarhorn.ps1" in c.value for c in at.code)
+    at.selectbox(key="gj_snd_info").set_value("none").run()
+    _button(at, "Save sounds").click().run()
+    assert not at.exception, at.exception
+    g = store.get_setting("gjallarhorn")
+    assert g["sounds"]["info"] == "none" and g["root"] == str(tmp_path / "gj")    # the folder is kept
+
+
 def test_builder_saves_a_renotify_on_move_rule(wired, store):
     alert, at = _open_builder(store, "Market-data feed")
     at.segmented_control[0].set_value("Trigger").run()

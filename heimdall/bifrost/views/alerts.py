@@ -32,17 +32,20 @@ def render() -> None:
 
     groups = sorted({a.get("group") or "" for a in alerts} - {""}, key=str.lower)
     tags = sorted({t for a in alerts for t in a.get("tags", [])})
-    f = st.columns([2, 2, 2, 1])
+    f = st.columns([2, 2, 2, 2, 1])
     q = f[0].text_input("Search", placeholder="Name, description or owner",
                         label_visibility="collapsed").strip().lower()
     picked_groups = f[1].multiselect("Groups", groups + [UNGROUPED], placeholder="Any group",
                                      label_visibility="collapsed", key="alerts_groups")
-    picked_tags = f[2].multiselect("Tags", tags, placeholder="Any tag", label_visibility="collapsed")
-    only_on = f[3].toggle("Enabled only")
+    picked_sev = f[2].multiselect("Severity", list(SEVERITY), format_func=SEVERITY.get, placeholder="Any severity",
+                                  label_visibility="collapsed", key="alerts_severity")
+    picked_tags = f[3].multiselect("Tags", tags, placeholder="Any tag", label_visibility="collapsed")
+    only_on = f[4].toggle("Enabled only")
     shown = [a for a in alerts
              if (not q or q in (a["name"] + a.get("description", "") + a.get("owner", "")).lower())
              and (not picked_groups or (a.get("group") or UNGROUPED) in picked_groups)
              and (not picked_tags or set(picked_tags) & set(a.get("tags", [])))
+             and (not picked_sev or a.get("severity", "warning") in picked_sev)
              and (not only_on or a["enabled"])]
     shown.sort(key=lambda a: (not a.get("group"), (a.get("group") or "").lower(), a["name"].lower()))
 
@@ -52,6 +55,7 @@ def render() -> None:
     df = pd.DataFrame([{
         "On": a["enabled"],
         "Group": a.get("group") or "",
+        "Severity": SEVERITY.get(a.get("severity", "warning"), ""),
         "Alert": a["name"],
         "Checks": c.every(a["interval_secs"]),
         "Hours": hours.describe(ActiveHours(**a["active_hours"])) if a.get("active_hours") else "Any time",
@@ -107,6 +111,7 @@ def render() -> None:
 
 
 UNGROUPED = "Ungrouped"
+SEVERITY = {"critical": "Critical", "warning": "Warning", "info": "Info"}
 NEW_GROUP = "➕ New group…"
 
 

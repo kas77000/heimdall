@@ -62,6 +62,16 @@ class HuginnClient:
     def get(self, path: str, **params) -> Any:
         return self._call("GET", path, params={k: v for k, v in params.items() if v is not None})
 
+    def get_bytes(self, path: str, **params) -> bytes:
+        """A file rather than JSON (a sound to preview)."""
+        try:
+            r = self._http.get(path, params={k: v for k, v in params.items() if v is not None})
+        except httpx.TransportError as exc:
+            raise HuginnUnreachable(f"cannot reach Huginn at {self.url}: {exc}") from None
+        if r.status_code >= 400:
+            raise HuginnError(r.status_code, r.text)
+        return r.content
+
     def post(self, path: str, body: Any = None, **params) -> Any:
         return self._call("POST", path, json=body,
                           params={k: v for k, v in params.items() if v is not None})

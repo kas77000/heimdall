@@ -18,6 +18,7 @@ from heimdall.core import conditions, cron
 from heimdall.core.evaluate import Evaluation
 from heimdall.core.models import ROW_TRIGGERS, Alert
 
+SEVERITY_COLOURS = {"critical": "#c62828", "warning": "#b26a00", "info": "#1f6fb2"}
 TABLE_ROWS = 20                            # rows in the body of a mail not about rows
 PREVIEW_ROWS = 50                          # rows previewed in the body when every row is attached
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024    # mail relays commonly refuse much bigger mails
@@ -60,6 +61,8 @@ class Delivery:
 def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "") -> Message:
     label = {"trigger": "TRIGGERED", "error": "ERROR", "recovery": "RECOVERED"}[kind]
     subject = (alert.channels.subject.strip() or f"[Heimdall] {alert.name}") + f": {label}"
+    if kind == "trigger":
+        subject = f"[{alert.severity.upper()}] " + subject      # sorts and filters in a mailbox
     lines = [f"{alert.name}: {label}"]
     if alert.description:
         lines.append(alert.description)
@@ -122,7 +125,9 @@ def _csv_attachment(alert: Alert, table: pd.DataFrame) -> tuple[Attachment, str]
 
 def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], limit: Optional[int], url,
           where_rest: str = "") -> str:
-    colour = {"trigger": "#c62828", "error": "#ef6c00", "recovery": "#2e7d32"}[kind]
+    colour = {"trigger": SEVERITY_COLOURS.get(alert.severity, "#c62828"), "error": "#ef6c00", "recovery": "#2e7d32"}[kind]
+    if kind == "trigger":
+        label = f"{label} · {alert.severity.upper()}"
     parts = [f'<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1d2433">',
              f'<div style="border-left:4px solid {colour};padding:4px 12px;margin-bottom:12px">',
              f'<div style="font-size:12px;letter-spacing:.08em;color:{colour};font-weight:600">{label}</div>',

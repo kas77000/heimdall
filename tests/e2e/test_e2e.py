@@ -264,7 +264,7 @@ def test_04_engine_runs_it_and_notifies_once(stack):
     mail = wait_until(lambda: stack.smtp.messages, 10, "an email")
     assert mail[0]["rcpt"] == ["desk@example.com"]
     assert "E2E orders priced through Bloomberg" in mail[0]["data"]
-    assert "Subject: [Heimdall] E2E orders priced through Bloomberg: TRIGGERED" in mail[0]["data"]
+    assert "Subject: [WARNING] [Heimdall] E2E orders priced through Bloomberg: TRIGGERED" in mail[0]["data"]
     assert len(stack.smtp.messages) == 1                       # transition: once
 
 
@@ -308,7 +308,7 @@ def test_06_errors_and_recovery_are_notified(stack):
     assert [r["status"] for r in (first, second, third)] == ["error", "error", "error"]
     assert [r["notified"] for r in (first, second, third)] == [None, "error", None]
     assert "feed handler unreachable" in second["error"]
-    assert subjects() == ["[Heimdall] E2E flag: TRIGGERED", "[Heimdall] E2E flag: RECOVERED",
+    assert subjects() == ["[WARNING] [Heimdall] E2E flag: TRIGGERED", "[Heimdall] E2E flag: RECOVERED",
                           "[Heimdall] E2E flag: ERROR"]
 
 

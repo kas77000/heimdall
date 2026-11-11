@@ -631,6 +631,7 @@ def _lines(text: str) -> list[str]:
 
 def _notify(d: dict) -> None:
     ch = d["channels"]
+    _severity(d)
     ch["email_to"] = _lines(st.text_area("Email to", height=90,
                                          key=c.seed(K("n_to"), "\n".join(ch.get("email_to", []))),
                                          placeholder="one address per line"))
@@ -644,13 +645,67 @@ def _notify(d: dict) -> None:
                                                key=c.seed(K("n_errn"), ch.get("error_after", 3))))
     ch["notify_on_recovery"] = h.toggle("Tell me when it clears", key=c.seed(K("n_rec"), ch.get("notify_on_recovery", False)))
     _all_clear(d, ch)
-    if not ch["email_to"]:
+    _pop_ups(d, ch)
+    if not ch["email_to"] and not ch["gjallarhorn"]["enabled"]:
         st.caption("No one will be told. Firings still show in Overview and History.")
+    elif not ch["email_to"]:
+        pass
     elif st.button("Send a test notification", icon=":material/send:"):
         res = c.call(lambda: c.huginn().post("/alerts/test-notification", _clean(d)))
         for dl in (res or {}).get("deliveries", []):
             (st.success if dl["ok"] else st.error)(f"{dl['channel']} → {dl['target']}"
                                                    + ("" if dl["ok"] else f": {dl['error']}"))
+
+
+SEVERITY = {"info": "Info", "warning": "Warning", "critical": "Critical"}
+SOUNDS = {"": "Default for its severity", "none": "Silent",
+          "horn:info": "Horn: one soft call", "horn:warning": "Horn: two blasts", "horn:critical": "Horn: three blasts, held",
+          "system:asterisk": "Windows: Asterisk", "system:exclamation": "Windows: Exclamation",
+          "system:hand": "Windows: Critical stop", "system:beep": "Windows: Beep", "system:question": "Windows: Question"}
+
+
+def _severity(d: dict) -> None:
+    """How serious the alert is, and what it sounds like on traders' screens."""
+    a, b = st.columns([1, 2])
+    d["severity"] = a.segmented_control("Severity", list(SEVERITY), format_func=SEVERITY.get,
+                                        key=c.seed(K("sev"), d.get("severity", "warning")),
+                                        help="Shown in Overview and Alerts, at the start of a firing's email subject, "
+                                             "and on traders' pop-ups") or "warning"
+    sounds = c.call(lambda: c.huginn().get("/gjallarhorn/sounds"), quiet=True) or {}
+    choices = dict(SOUNDS)
+    for f in sounds.get("files", []):
+        choices[f["sound"]] = f"Uploaded: {f['name']}"
+    current = d.get("sound", "")
+    if current not in choices:
+        choices[current] = current
+    d["sound"] = b.selectbox("Sound", list(choices), format_func=choices.get, key=c.seed(K("snd"), current),
+                             help="Played by Gjallarhorn when it pops up. Upload sounds in Settings → Gjallarhorn.")
+    actual = d["sound"] or (sounds.get("defaults") or {}).get(d["severity"], f"horn:{d['severity']}")
+    if actual.startswith(("horn:", "file:")):
+        data = c.call(lambda: c.huginn().get_bytes("/gjallarhorn/sound", sound=actual), quiet=True)
+        if data:
+            b.audio(data, format="audio/wav")
+    elif actual.startswith("system:"):
+        b.caption("A Windows sound: it plays on the trader's PC, not here.")
+
+
+def _pop_ups(d: dict, ch: dict) -> None:
+    """Gjallarhorn: a pop-up on traders' screens, for everyone or some desks / traders."""
+    g = ch.setdefault("gjallarhorn", {})
+    st.markdown("#### Traders' pop-ups")
+    g["enabled"] = st.toggle("Pop up on traders' screens (Gjallarhorn)",
+                             key=c.seed(K("gj_on"), bool(g.get("enabled", False))),
+                             help="Set the shared folder in Settings → Gjallarhorn")
+    if not g["enabled"]:
+        return
+    g.pop("severity", None)                       # the alert's own now (Notify, at the top)
+    g["audience"] = st.multiselect("For", sorted(set(g.get("audience", []))), accept_new_options=True,
+                                  key=c.seed(K("gj_to"), list(g.get("audience", []))),
+                                  placeholder="Every trader", help="Desks or Windows user names. Empty: every trader.")
+    g["on_recovery"] = st.toggle("Also a short pop-up when it clears", key=c.seed(K("gj_rec"), bool(g.get("on_recovery", False))))
+    st.caption({"info": "Fades after a few seconds.", "warning": "Fades after 25 seconds unless the trader is reading it.",
+                "critical": "Stays on screen until the trader acts on it."}[d.get("severity", "warning")]
+               + " Every pop-up waits in the trader's list until acknowledged; who acknowledged it shows in History.")
 
 
 ROWS_IN = {"body": "In the body", "attachment": "As a CSV attachment"}

@@ -15,12 +15,14 @@ from heimdall.core.chain import Pool, frame_to_records
 from heimdall.core.evaluate import AlertState, Evaluation, evaluate_alert
 from heimdall.core.kdb import PyKxClient
 from heimdall.core.models import Alert
-from heimdall.core.notify import SmtpSettings, compose, compose_all_clear, deliver
+from heimdall.core.notify import Delivery, SmtpSettings, compose, compose_all_clear, deliver
+from heimdall import gjallarhorn
 from heimdall.muninn.store import Muninn, iso, parse_iso, utcnow
 
 log = logging.getLogger("heimdall.huginn")
 
 RETENTION_EVERY = timedelta(hours=1)
+ACKS_EVERY = timedelta(seconds=10)         # how often Gjallarhorn acknowledgements are read back
 
 
 def smtp_from(settings: dict) -> SmtpSettings:
@@ -46,6 +48,8 @@ class Engine:
         self.started_at: Optional[datetime] = None
         self.last_tick: Optional[datetime] = None
         self._last_retention: Optional[datetime] = None
+        self._last_acks: Optional[datetime] = None
+        self._acks_done: set[int] = set()
         self.paused = False
         self.sleipnir_seen: Optional[datetime] = None
 
@@ -110,6 +114,7 @@ class Engine:
         now = self.clock()
         self.last_tick = now
         self._retention(now)
+        self._gjallarhorn_acks(now)
         self._watch_hours(now)
         if self.paused:
             return
@@ -213,9 +218,53 @@ class Engine:
     def _notify(self, alert: Alert, ev: Evaluation, run_id: int) -> None:
         url = f"{self.cfg.bifrost_url.rstrip('/')}/history?run={run_id}" if self.cfg.bifrost_url else ""
         msg = compose(alert, ev, ev.notify, url)
-        deliveries = deliver(alert, msg, smtp_from(self.store.settings()), **self._deliver_kw)
+        settings = self.store.settings()
+        # A recovery asked for only as a pop-up does not mail.
+        mail = ev.notify != "recovery" or alert.channels.notify_on_recovery
+        deliveries = deliver(alert, msg, smtp_from(settings), **self._deliver_kw) if mail else []
+        deliveries += self._pop_up(alert, ev, run_id, settings)
         if deliveries:
             self.store.record_deliveries(run_id, ev.notify, deliveries)
+
+    def _pop_up(self, alert: Alert, ev: Evaluation, run_id: int, settings: dict) -> list[Delivery]:
+        """Gjallarhorn: a file on the share for traders' pop-ups (firings, and recoveries if asked)."""
+        g = alert.channels.gjallarhorn
+        if not g.enabled or ev.notify not in ("trigger", "recovery") or \
+                (ev.notify == "recovery" and not g.on_recovery):
+            return []
+        who = ", ".join(g.audience) or "every trader"
+        try:
+            g_settings = gjallarhorn.Settings.from_store(settings)
+            gjallarhorn.publish(g_settings, gjallarhorn.payload(alert, ev, ev.notify, run_id, self.clock(), g_settings))
+            return [Delivery("gjallarhorn", who, True)]
+        except Exception as exc:  # noqa: BLE001 - a share blip must not lose the run
+            log.warning("gjallarhorn: %s", exc)
+            return [Delivery("gjallarhorn", who, False, str(exc))]
+
+    def _gjallarhorn_acks(self, now: datetime) -> None:
+        """Record on the run what traders acknowledged in Gjallarhorn."""
+        if self._last_acks and now - self._last_acks < ACKS_EVERY:
+            return
+        self._last_acks = now
+        g = gjallarhorn.Settings.from_store(self.store.settings())
+        if not g.configured:
+            return
+        try:
+            found = gjallarhorn.acks(g, since=now - timedelta(days=g.keep_days))
+        except Exception:  # noqa: BLE001
+            log.warning("gjallarhorn: could not read acknowledgements from %s", g.root)
+            return
+        for a in found:
+            if a.run_id in self._acks_done:
+                continue
+            self._acks_done.add(a.run_id)
+            try:
+                if self.store.acknowledge([a.run_id], by=f"{a.user} (Gjallarhorn)"):
+                    run = self.store.run(a.run_id)
+                    self.store.log_event(a.user, "acknowledged in Gjallarhorn", detail=f"run {a.run_id}",
+                                         alert_id=run["alert_id"], alert_name=run["alert_name"])
+            except Exception:  # noqa: BLE001
+                log.exception("gjallarhorn: recording the acknowledgement of run %s failed", a.run_id)
 
     def _all_clear(self, alert: Alert, ev: Evaluation, row: dict, now: datetime) -> tuple[Optional[dict], dict]:
         """Whether this check sends the all-clear mail, and the period's new state.
@@ -277,6 +326,10 @@ class Engine:
         if self._last_retention and now - self._last_retention < RETENTION_EVERY:
             return
         self._last_retention = now
+        try:
+            gjallarhorn.clean(gjallarhorn.Settings.from_store(self.store.settings()), now)
+        except Exception:  # noqa: BLE001
+            log.warning("gjallarhorn: cleaning the shared folder failed")
         policy = self.store.get_setting("retention") or {}
         days, keep = policy.get("days"), policy.get("keep_last")
         if not days and not keep:

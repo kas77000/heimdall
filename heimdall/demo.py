@@ -36,7 +36,7 @@ def demo_scripts() -> list[Script]:
 
 def demo_alerts() -> list[tuple[Alert, list[dict]]]:
     limit_breach = Alert(
-        name="Price outside Bloomberg limits",
+        name="Price outside Bloomberg limits", severity="critical",
         description="Working orders whose stock trades beyond its limit-up / limit-down price.",
         tags=["demo", "limits"], interval_secs=30, enabled=True,
         steps=[
@@ -63,7 +63,7 @@ def demo_alerts() -> list[tuple[Alert, list[dict]]]:
         condition=Condition(type="any_row", column="lag_secs", op=">", value=60),
         rearm=Rearm(mode="cooldown", cooldown_secs=300))
     big_fills = Alert(
-        name="Large fills by desk",
+        name="Large fills by desk", severity="info",
         description="Fills of 2,500 shares or more, with the desk that owns the order.",
         tags=["demo"], interval_secs=0, enabled=False,
         steps=[

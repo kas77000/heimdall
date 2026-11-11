@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from heimdall import __version__
+from heimdall import __version__, gjallarhorn
 from heimdall.config import Config
 from heimdall.core import cron, hours
 from heimdall.core.chain import Pool, validate as validate_alert
@@ -30,6 +30,16 @@ class PurgeRequest(BaseModel):
     everything: bool = False
     keep_unacknowledged: bool = False
     dry_run: bool = False
+
+
+class SoundUpload(BaseModel):
+    name: str
+    data: str                        # base64
+
+
+class PopUpTest(BaseModel):
+    audience: list[str] = Field(default_factory=list)
+    severity: Literal["info", "warning", "critical"] = "warning"
 
 
 class AckRequest(BaseModel):
@@ -102,7 +112,8 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
             unack = store.count_runs(alert_id=a.id, unacknowledged=True)
             alerts.append({
                 "id": a.id, "name": a.name, "enabled": a.enabled, "interval_secs": a.interval_secs,
-                "tags": a.tags, "owner": a.owner, "group": a.group, "running": a.id in inflight,
+                "tags": a.tags, "owner": a.owner, "group": a.group, "severity": a.severity,
+                "running": a.id in inflight,
                 "off_hours": a.enabled and not hours.is_active(a.active_hours, now),
                 "active_hours": hours.describe(a.active_hours),
                 "last_run_at": st.get("last_run_at"), "last_status": st.get("last_status"),
@@ -438,10 +449,87 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
     @app.post("/runs/acknowledge", dependencies=secured)
     def acknowledge(body: AckRequest, who: str = Depends(actor)):
         if body.all or (body.alert_id is not None and not body.run_ids):
+            ids = [r["id"] for r in store.runs(alert_id=body.alert_id, triggered_only=True,
+                                               unacknowledged=True, limit=5000)]
             n = store.acknowledge_all(body.alert_id, by=who)
         else:
+            ids = list(body.run_ids)
             n = store.acknowledge(body.run_ids, by=who)
+        _close_pop_ups(ids, who)
         return {"acknowledged": n}
+
+    def _close_pop_ups(run_ids: list[int], who: str) -> None:
+        """Acknowledged in Bifrost: say so on the share, so traders' pop-ups close too."""
+        g = gjallarhorn.Settings.from_store(store.settings())
+        if not g.configured:
+            return
+        for rid in run_ids:
+            try:
+                if any(d["channel"] == "gjallarhorn" and d["ok"] for d in store.run(rid)["deliveries"]):
+                    gjallarhorn.acknowledge(g, str(rid), who or "bifrost", note="acknowledged in Bifrost")
+            except (NotFound, OSError):
+                continue
+
+    # -- gjallarhorn ---------------------------------------------------------
+
+    @app.get("/gjallarhorn", dependencies=secured)
+    def gjallarhorn_status():
+        return gjallarhorn.status(gjallarhorn.Settings.from_store(store.settings()))
+
+    @app.post("/gjallarhorn/test", dependencies=secured)
+    def gjallarhorn_test(body: PopUpTest, who: str = Depends(actor)):
+        try:
+            data = gjallarhorn.publish_test(gjallarhorn.Settings.from_store(store.settings()),
+                                            body.audience, body.severity)
+        except (RuntimeError, OSError) as exc:
+            raise HTTPException(422, f"could not write to the shared folder: {exc}")
+        store.log_event(who, "gjallarhorn test", detail=", ".join(body.audience) or "every trader")
+        return data
+
+    @app.get("/gjallarhorn/sounds", dependencies=secured)
+    def gjallarhorn_sounds():
+        g = gjallarhorn.Settings.from_store(store.settings())
+        return {"defaults": {s: g.sound_for(s) for s in ("info", "warning", "critical")},
+                "files": gjallarhorn.sound_files(g)}
+
+    @app.post("/gjallarhorn/sounds", dependencies=secured)
+    def gjallarhorn_upload_sound(body: SoundUpload, who: str = Depends(actor)):
+        import base64
+        import binascii
+        try:
+            data = base64.b64decode(body.data, validate=True)
+            sound = gjallarhorn.save_sound(gjallarhorn.Settings.from_store(store.settings()), body.name, data)
+        except (ValueError, binascii.Error, RuntimeError, OSError) as exc:
+            raise HTTPException(422, str(exc))
+        store.log_event(who, "gjallarhorn sound added", detail=sound)
+        return {"sound": sound}
+
+    @app.delete("/gjallarhorn/sounds/{name}", dependencies=secured)
+    def gjallarhorn_delete_sound(name: str, who: str = Depends(actor)):
+        try:
+            gone = gjallarhorn.delete_sound(gjallarhorn.Settings.from_store(store.settings()), name)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc))
+        if gone:
+            store.log_event(who, "gjallarhorn sound removed", detail=name)
+        return {"deleted": gone}
+
+    @app.get("/gjallarhorn/sound", dependencies=secured)
+    def gjallarhorn_sound_bytes(sound: str):
+        data = gjallarhorn.sound_bytes(gjallarhorn.Settings.from_store(store.settings()), sound)
+        if data is None:
+            raise HTTPException(404, f"no file for {sound}")
+        return Response(data, media_type="audio/wav")
+
+    @app.post("/gjallarhorn/deploy", dependencies=secured)
+    def gjallarhorn_deploy(who: str = Depends(actor)):
+        g = gjallarhorn.Settings.from_store(store.settings())
+        try:
+            copied = gjallarhorn.deploy_app(g)
+        except (RuntimeError, OSError) as exc:
+            raise HTTPException(422, f"could not publish the app: {exc}")
+        store.log_event(who, "gjallarhorn app published", detail=g.root)
+        return {"copied": copied, "install": gjallarhorn.install_command(g)}
 
     @app.post("/history/purge", dependencies=secured)
     def purge(body: PurgeRequest, who: str = Depends(actor)):
@@ -474,11 +562,12 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
     def get_settings():
         s = store.settings()
         return {"smtp": s.get("smtp") or {}, "retention": s.get("retention") or {},
+                "gjallarhorn": s.get("gjallarhorn") or {},
                 "engine_paused": bool(s.get("engine_paused", False))}
 
     @app.put("/settings", dependencies=secured)
     def put_settings(values: dict, who: str = Depends(actor)):
-        allowed = {k: v for k, v in values.items() if k in ("smtp", "retention")}
+        allowed = {k: v for k, v in values.items() if k in ("smtp", "retention", "gjallarhorn")}
         store.set_settings(allowed)
         store.log_event(who, "settings changed", detail=", ".join(sorted(allowed)))
         return get_settings()

@@ -252,8 +252,51 @@ class AllClear(BaseModel):
 ROW_TRIGGERS = ("has_rows", "row_count", "any_row", "all_rows")
 
 
+SEVERITIES = ("info", "warning", "critical")
+# What an alert sounds like on traders' screens:
+#   ""              the default for its severity (Settings -> Gjallarhorn; Gjallarhorn's horns out of the box)
+#   "none"          silent
+#   "horn:<level>"  one of Gjallarhorn's horn calls: info (one soft call), warning (two), critical (three, held)
+#   "system:<name>" a Windows sound: asterisk, beep, exclamation, hand, question
+#   "file:<x>.wav"  a sound uploaded to the shared folder
+HORNS = ("horn:info", "horn:warning", "horn:critical")
+SYSTEM_SOUNDS = ("system:asterisk", "system:beep", "system:exclamation", "system:hand", "system:question")
+SOUND_FILE_RE = re.compile(r"^[A-Za-z0-9._ -]{1,80}\.wav$")
+
+
+def check_sound(v: str) -> str:
+    v = (v or "").strip()
+    if v in ("", "none") or v in HORNS or v in SYSTEM_SOUNDS:
+        return v
+    if v.startswith("file:") and SOUND_FILE_RE.match(v[5:]):
+        return v
+    raise ValueError(f"unknown sound '{v}'")
+
+
+class Gjallarhorn(BaseModel):
+    """A pop-up on traders' screens, through the Gjallarhorn folder on the share.
+
+    ``audience``: Windows user names or desk names; empty = every trader. A
+    trader's PC knows its user and the desks it was installed for.
+    """
+    enabled: bool = False
+    audience: list[str] = Field(default_factory=list)
+    on_recovery: bool = False        # also a short "cleared" pop-up, nothing to acknowledge
+
+    @field_validator("audience")
+    @classmethod
+    def _audience(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for x in v:
+            x = " ".join(str(x).split())
+            if x and x.lower() not in {o.lower() for o in out}:
+                out.append(x)
+        return out
+
+
 class Channels(BaseModel):
     email_to: list[str] = Field(default_factory=list)
+    gjallarhorn: Gjallarhorn = Field(default_factory=Gjallarhorn)
     subject: str = ""                # empty = "[Heimdall] <alert name>"
     notify_on_error: bool = False
     error_after: int = 3             # consecutive errors before an error notifies
@@ -312,6 +355,8 @@ class Alert(BaseModel):
     description: str = ""
     owner: str = ""
     group: str = ""                  # one group per alert; empty = ungrouped
+    severity: Literal["info", "warning", "critical"] = "warning"
+    sound: str = ""                  # see SEVERITIES above; empty = the severity's default
     tags: list[str] = Field(default_factory=list)
     enabled: bool = False
     interval_secs: int = 60          # 0 = only when scheduled or run by hand
@@ -333,6 +378,21 @@ class Alert(BaseModel):
     @classmethod
     def _group(cls, v: str) -> str:
         return " ".join((v or "").split())
+
+    @field_validator("sound")
+    @classmethod
+    def _sound(cls, v: str) -> str:
+        return check_sound(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _severity_from_pop_ups(cls, data):
+        """Severity was first a pop-up setting; it is now the alert's own."""
+        if isinstance(data, dict) and "severity" not in data:
+            g = ((data.get("channels") or {}) if isinstance(data.get("channels"), dict) else {}).get("gjallarhorn")
+            if isinstance(g, dict) and g.get("severity") in SEVERITIES:
+                data = {**data, "severity": g["severity"]}
+        return data
 
     @field_validator("interval_secs")
     @classmethod
