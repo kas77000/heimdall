@@ -321,8 +321,9 @@ In **Builder**:
 4. **Notify**: email addresses; optionally notify after N failures in a row,
    and when it clears. When the trigger is about rows (*any rows*, a row
    count, *any* or *every row where…*), **Rows in the mail** chooses where the
-   rows that made it fire go: *In the body*, the first *How many rows* of them
-   (20 unless you change it; 0 = every row), or *As a CSV attachment*, every
+   rows that made it fire go: *In the body*, in the mail itself (every row
+   while *All rows* is ticked, the default; untick it to set *How many rows*), or
+   *As a CSV attachment*, a preview of the first 50 rows in the mail and every
    row in a `.csv` file that opens in Excel (up to 10 MB; beyond that, the
    first rows that fit, and the mail says so). **Send a test notification**
    follows this choice. **Also mail when all clear** sends the same people a

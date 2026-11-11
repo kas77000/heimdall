@@ -19,7 +19,7 @@ from heimdall.core import cron, hours
 from heimdall.core.conditions import describe, describe_delta
 from heimdall.core.kdb import build_q
 from heimdall.core.models import ALL_CLEAR_INTERVALS, ROW_TRIGGERS, ActiveHours, Alert, Condition, KdbStep, Rearm
-from heimdall.core.notify import ALL_CLEAR_FIELDS
+from heimdall.core.notify import ALL_CLEAR_FIELDS, PREVIEW_ROWS
 
 DRAFT, REV, LOADED, PREVIEW = "builder_draft", "builder_rev", "builder_loaded", "builder_preview"
 
@@ -665,15 +665,19 @@ def _rows_in_mail(d: dict, ch: dict) -> None:
                             key=c.seed(K("n_rows_in"), ch.get("rows_in", "body")),
                             help="The rows that made the alert fire")
     if ch["rows_in"] == "body":
-        ch["body_rows"] = int(b.number_input("How many rows", min_value=0, step=10,
-                                             key=c.seed(K("n_rows_n"), int(ch.get("body_rows", 20))),
-                                             help="0 = every row. A long table makes a long mail: "
-                                                  "the CSV attachment suits big results better."))
-        st.caption("All rows are shown." if ch["body_rows"] == 0 else
-                   f"The first {ch['body_rows']} row(s) are shown in the mail.")
+        every = b.checkbox("All rows", key=c.seed(K("n_rows_all"), not ch.get("body_rows")),
+                           help="Untick to send only the first rows. A long table makes a long mail: "
+                                "the CSV attachment suits big results better.")
+        if every:
+            ch["body_rows"] = None
+            st.caption("Every row is shown in the mail.")
+        else:
+            ch["body_rows"] = int(b.number_input("How many rows", min_value=1, step=10,
+                                                 key=c.seed(K("n_rows_n"), int(ch.get("body_rows") or 20))))
+            st.caption(f"The first {ch['body_rows']} row(s) are shown in the mail.")
     else:
-        st.caption("Every row is attached as a .csv file that opens in Excel "
-                   "(up to 10 MB; beyond that, the first rows that fit).")
+        st.caption(f"The first {PREVIEW_ROWS} rows are shown in the mail as a preview, and every row is "
+                   "attached as a .csv file that opens in Excel (up to 10 MB; beyond that, the first rows that fit).")
 
 
 def _all_clear(d: dict, ch: dict) -> None:

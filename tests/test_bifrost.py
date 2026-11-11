@@ -203,16 +203,24 @@ def test_builder_chooses_rows_in_the_body_or_attached(wired, store):
     at.segmented_control[0].set_value("Notify").run()
     rows_in = next(r for r in at.radio if r.label == "Rows in the mail")
     assert rows_in.value == "body"
-    next(n for n in at.number_input if n.label == "How many rows").set_value(50).run()
-    assert any("first 50 row(s)" in c.value for c in at.caption)
+    every = next(x for x in at.checkbox if x.label == "All rows")
+    assert every.value and not [n for n in at.number_input if n.label == "How many rows"]
+    assert any("Every row is shown in the mail" in c.value for c in at.caption)
+    every.set_value(False).run()
+    how_many = next(n for n in at.number_input if n.label == "How many rows")
+    assert how_many.value == 20
+    how_many.set_value(30).run()
+    assert any("first 30 row(s)" in c.value for c in at.caption)
     _button(at, "Save alert").click().run()
     assert not at.exception, at.exception
-    assert (store.alert(alert.id).channels.rows_in, store.alert(alert.id).channels.body_rows) == ("body", 50)
+    assert (store.alert(alert.id).channels.rows_in, store.alert(alert.id).channels.body_rows) == ("body", 30)
 
     alert, at = _open_builder(store, "Market-data feed")
     at.segmented_control[0].set_value("Notify").run()
     next(r for r in at.radio if r.label == "Rows in the mail").set_value("attachment").run()
+    assert any("first 50 rows are shown in the mail as a preview" in c.value for c in at.caption)
     assert not [n for n in at.number_input if n.label == "How many rows"]
+    assert not [x for x in at.checkbox if x.label == "All rows"]
     _button(at, "Save alert").click().run()
     assert not at.exception, at.exception
     assert store.alert(alert.id).channels.rows_in == "attachment"

@@ -18,7 +18,8 @@ from heimdall.core import conditions, cron
 from heimdall.core.evaluate import Evaluation
 from heimdall.core.models import ROW_TRIGGERS, Alert
 
-TABLE_ROWS = 20                            # rows in the body unless the alert says otherwise
+TABLE_ROWS = 20                            # rows in the body of a mail not about rows
+PREVIEW_ROWS = 50                          # rows previewed in the body when every row is attached
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024    # mail relays commonly refuse much bigger mails
 
 
@@ -80,19 +81,22 @@ def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "") -> M
         if alert.channels.rows_in == "attachment":
             att, note = _csv_attachment(alert, table)
             attachments.append(att)
+            if len(table) > PREVIEW_ROWS:
+                note += f" The first {PREVIEW_ROWS} are shown below."
             lines.append(note)
-            table = None                               # the rows are in the file, not the body
+            limit = PREVIEW_ROWS
         else:
-            limit = alert.channels.body_rows or None   # 0 = every row
+            limit = alert.channels.body_rows           # None = every row
     text = "\n".join(lines)
     if table is not None:
         head = table if limit is None else table.head(limit)
         text += "\n\n" + head.to_string(index=False)
         if len(table) > len(head):
-            text += f"\n… {len(table) - len(head)} more row(s)"
+            text += f"\n… {len(table) - len(head)} more row(s){' in the attachment' if attachments else ''}"
     if bifrost_url:
         text += f"\n\nOpen in Bifrost: {bifrost_url}"
-    return Message(subject, text, _html(alert, ev, kind, label, lines, table, limit, bifrost_url),
+    return Message(subject, text, _html(alert, ev, kind, label, lines, table, limit, bifrost_url,
+                                        " in the attachment" if attachments else ""),
                    attachments)
 
 
@@ -116,7 +120,8 @@ def _csv_attachment(alert: Alert, table: pd.DataFrame) -> tuple[Attachment, str]
             f"(a mail attachment is limited to {mb} MB); every row is in Bifrost.")
 
 
-def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], limit: Optional[int], url) -> str:
+def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], limit: Optional[int], url,
+          where_rest: str = "") -> str:
     colour = {"trigger": "#c62828", "error": "#ef6c00", "recovery": "#2e7d32"}[kind]
     parts = [f'<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1d2433">',
              f'<div style="border-left:4px solid {colour};padding:4px 12px;margin-bottom:12px">',
@@ -134,7 +139,7 @@ def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], limit: O
         parts.append(f'<table style="border-collapse:collapse;margin-top:10px">'
                      f"<thead><tr>{cells}</tr></thead><tbody>{body}</tbody></table>")
         if len(table) > len(head):
-            parts.append(f'<p style="color:#667">… {len(table) - len(head)} more row(s)</p>')
+            parts.append(f'<p style="color:#667">… {len(table) - len(head)} more row(s){where_rest}</p>')
     if url:
         parts.append(f'<p style="margin-top:14px"><a href="{html.escape(url)}">Open in Bifrost</a></p>')
     parts.append("</div>")

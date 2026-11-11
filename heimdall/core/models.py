@@ -260,10 +260,15 @@ class Channels(BaseModel):
     notify_on_recovery: bool = False
     all_clear: AllClear = Field(default_factory=AllClear)
     # For a row-based trigger (ROW_TRIGGERS): where the firing's rows go in the mail.
-    # "body": the first ``body_rows`` rows (0 = all) in the mail itself.
-    # "attachment": every row, as a CSV file attached to the mail.
+    # "body": the first ``body_rows`` rows in the mail itself; None (the default) = every row.
+    # "attachment": every row as a CSV file, and a preview of the first rows in the body.
     rows_in: Literal["body", "attachment"] = "body"
-    body_rows: int = Field(default=20, ge=0)
+    body_rows: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("body_rows", mode="before")
+    @classmethod
+    def _all_rows(cls, v):
+        return None if v in (0, "", None) else v      # 0 once meant every row
 
 
 HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")

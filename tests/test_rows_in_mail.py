@@ -1,4 +1,4 @@
-"""A row-based alert's rows in its mail: in the body (how many), or as a CSV attachment."""
+"""A row-based alert's rows in its mail: all in the body, or attached as CSV with a preview."""
 import email
 import io
 from email.header import decode_header, make_header
@@ -12,8 +12,9 @@ from heimdall.core.models import Alert, Channels, Condition, KdbStep
 from heimdall.core.notify import SmtpSettings, compose, send_email
 from heimdall.demo import seed
 
-ROWS = pd.DataFrame({"sym": [f"S{i}" for i in range(50)], "px": [float(i) for i in range(50)],
-                     "desk": ["Équités"] * 50})
+N = 120
+ROWS = pd.DataFrame({"sym": [f"S{i}" for i in range(N)], "px": [float(i) for i in range(N)],
+                     "desk": ["Équités"] * N})
 
 
 def _alert(cond="has_rows", **channels) -> Alert:
@@ -32,40 +33,48 @@ def _rows_shown(text: str) -> int:
 
 # -- in the body -----------------------------------------------------------------
 
-def test_by_default_the_body_shows_20_rows_as_before():
+def test_the_body_shows_every_row():
     msg = compose(_alert(), _fired(), "trigger")
-    assert _rows_shown(msg.text) == 20 and "30 more row(s)" in msg.text
-    assert msg.html.count("<tr>") == 21 and not msg.attachments          # header row + 20
+    assert _rows_shown(msg.text) == N and "more row(s)" not in msg.text
+    assert msg.html.count("<tr>") == N + 1 and not msg.attachments       # header row + every row
+
+
+def test_a_saved_zero_from_before_still_means_every_row():
+    assert Channels(body_rows=0).body_rows is None
+    with pytest.raises(ValueError):
+        Channels(body_rows=-3)
 
 
 def test_the_body_shows_as_many_rows_as_asked():
     msg = compose(_alert(body_rows=5), _fired(), "trigger")
-    assert _rows_shown(msg.text) == 5 and "45 more row(s)" in msg.text
-    assert msg.html.count("<tr>") == 6
-
-
-def test_zero_means_every_row_in_the_body():
-    msg = compose(_alert(body_rows=0), _fired(), "trigger")
-    assert _rows_shown(msg.text) == 50 and "more row(s)" not in msg.text
-    assert msg.html.count("<tr>") == 51
+    assert _rows_shown(msg.text) == 5 and f"{N - 5} more row(s)" in msg.text
+    assert "in the attachment" not in msg.text and msg.html.count("<tr>") == 6
 
 
 # -- as an attachment ------------------------------------------------------------
 
-def test_attachment_carries_every_row_and_the_body_none():
+def test_attachment_carries_every_row_and_the_body_previews_50():
     msg = compose(_alert(rows_in="attachment"), _fired(), "trigger")
-    assert _rows_shown(msg.text) == 0 and "<table" not in msg.html
+    assert _rows_shown(msg.text) == 50 and msg.html.count("<tr>") == 51
+    assert f"{N - 50} more row(s) in the attachment" in msg.text
+    assert f"{N - 50} more row(s) in the attachment" in msg.html
     (att,) = msg.attachments
     assert att.filename.startswith("Big_fills_desk_qu") and att.filename.endswith(".csv")
-    assert f"All 50 row(s) are attached as {att.filename}." in msg.text
+    assert f"All {N} row(s) are attached as {att.filename}. The first 50 are shown below." in msg.text
     assert att.content.startswith(b"\xef\xbb\xbf")                       # BOM: Excel reads the accents
     back = pd.read_csv(io.BytesIO(att.content), encoding="utf-8-sig")
-    assert len(back) == 50 and list(back.columns) == ["sym", "px", "desk"] and back.desk[0] == "Équités"
+    assert len(back) == N and list(back.columns) == ["sym", "px", "desk"] and back.desk[0] == "Équités"
+
+
+def test_a_short_result_attached_is_previewed_whole():
+    msg = compose(_alert(rows_in="attachment"), _fired(ROWS.head(7)), "trigger")
+    assert _rows_shown(msg.text) == 7 and "more row(s)" not in msg.text and "shown below" not in msg.text
+    assert len(msg.attachments) == 1
 
 
 def test_matching_rows_are_what_gets_attached():
     ev = _fired()
-    ev.matching = ROWS[ROWS.px > 44]
+    ev.matching = ROWS[ROWS.px > N - 6]
     (att,) = compose(_alert("any_row", rows_in="attachment"), ev, "trigger").attachments
     assert len(pd.read_csv(io.BytesIO(att.content), encoding="utf-8-sig")) == 5
 
@@ -75,15 +84,15 @@ def test_an_attachment_too_big_for_a_mail_keeps_the_first_rows(monkeypatch):
     msg = compose(_alert(rows_in="attachment"), _fired(), "trigger")
     (att,) = msg.attachments
     kept = len(pd.read_csv(io.BytesIO(att.content), encoding="utf-8-sig"))
-    assert len(att.content) <= 300 and 0 < kept < 50
-    assert f"The first {kept} of 50 row(s) are attached" in msg.text
+    assert len(att.content) <= 300 and 0 < kept < N
+    assert f"The first {kept} of {N} row(s) are attached" in msg.text
 
 
 # -- only row-based triggers, only firing mails ----------------------------------
 
 @pytest.mark.parametrize("cond", ["no_rows", "aggregate"])
 def test_other_triggers_keep_the_usual_mail(cond):
-    msg = compose(_alert(cond, rows_in="attachment", body_rows=0), _fired(), "trigger")
+    msg = compose(_alert(cond, rows_in="attachment"), _fired(), "trigger")
     assert not msg.attachments and _rows_shown(msg.text) == 20
 
 
