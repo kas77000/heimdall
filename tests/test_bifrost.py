@@ -1,4 +1,6 @@
 """Every Bifrost page renders against a real Huginn (in-process) without raising."""
+import json
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -194,9 +196,22 @@ def test_settings_gjallarhorn(wired, store, tmp_path):
     assert store.get_setting("gjallarhorn")["root"] == str(tmp_path / "gj")
     _button(at, "Publish the app").click().run()
     assert (tmp_path / "gj" / "app" / "gjallarhorn.ps1").is_file()
-    _button(at, "Send a test").click().run()
+    _button(at, "Send a warning test to every trader").click().run()
     assert not at.exception, at.exception
-    assert list((tmp_path / "gj" / "alerts").rglob("*.json"))
+    (sent,) = (tmp_path / "gj" / "alerts").rglob("*.json")
+    first = json.loads(sent.read_text(encoding="utf-8"))
+    assert (first["severity"], first["audience"], first["sound"]) == ("warning", [], "horn:warning")
+
+    # a critical test for some desks only
+    at.segmented_control(key="gj_test_sev").set_value("critical").run()
+    at.radio(key="gj_test_scope").set_value("chosen").run()
+    assert _button(at, "Send a critical test to nobody yet").disabled
+    at.multiselect(key="gj_test_to").set_value(["Equities", "jdoe"]).run()
+    _button(at, "Send a critical test to Equities, jdoe").click().run()
+    assert not at.exception, at.exception
+    second = [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / "gj" / "alerts").rglob("*.json")
+              if p != sent][0]
+    assert (second["severity"], second["audience"], second["sound"]) == ("critical", ["Equities", "jdoe"], "horn:critical")
     assert any("install-gjallarhorn.ps1" in c.value for c in at.code)
     at.selectbox(key="gj_snd_info").set_value("none").run()
     _button(at, "Save sounds").click().run()

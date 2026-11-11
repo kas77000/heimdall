@@ -242,17 +242,45 @@ def _gjallarhorn() -> None:
                 st.toast(f"Published {len(r['copied'])} file(s)", icon=":material/check:")
     with b.container(border=True):
         st.markdown("**2. Send a test pop-up**")
-        aud = st.text_input("To", key="gj_test_to", placeholder="Everyone, or desks / Windows user names, comma separated")
-        sev = st.segmented_control("Severity", ["info", "warning", "critical"], default="warning", key="gj_test_sev")
-        if st.button("Send a test", icon=":material/notifications_active:", key="gj_test"):
-            who = [x.strip() for x in aud.split(",") if x.strip()]
-            if c.call(lambda: c.huginn().post("/gjallarhorn/test", {"audience": who, "severity": sev or "warning"})):
-                st.toast("Test pop-up written to the share", icon=":material/check:")
+        _test_pop_up()
     _sounds(g)
     st.markdown("**3. On each trader's PC**, once, as that trader (no admin rights):")
     st.code(status.get("install", ""), language="powershell")
     st.caption("`-Desk`: the desks that PC is for, comma separated. An alert pops up when it is for everyone, "
                "for that Windows user name, or for one of those desks. `-Uninstall` removes it.")
+
+
+TEST_SEVERITIES = {"info": "Info", "warning": "Warning", "critical": "Critical"}
+
+
+def _test_pop_up() -> None:
+    """A test pop-up: its severity (and so its sound), and everyone or chosen desks / traders."""
+    known = sorted({who for a in (c.call(lambda: c.huginn().get("/alerts"), quiet=True) or [])
+                    for who in ((a.get("channels") or {}).get("gjallarhorn") or {}).get("audience", [])},
+                   key=str.lower)
+    sev = st.segmented_control("Severity", list(TEST_SEVERITIES), format_func=TEST_SEVERITIES.get,
+                               default="warning", key="gj_test_sev") or "warning"
+    to = st.radio("Send to", ["everyone", "chosen"], horizontal=True, key="gj_test_scope",
+                  format_func={"everyone": "Every trader", "chosen": "Some desks or traders"}.get)
+    who: list[str] = []
+    if to == "chosen":
+        who = st.multiselect("Desks or Windows user names", known, accept_new_options=True, key="gj_test_to",
+                             placeholder="Pick or type a desk or a user name",
+                             help="The desks your alerts use are offered; type any other desk or user name")
+    info = c.call(lambda: c.huginn().get("/gjallarhorn/sounds"), quiet=True) or {}
+    sound = (info.get("defaults") or {}).get(sev, f"horn:{sev}")
+    if sound.startswith(("horn:", "file:")):
+        data = c.call(lambda: c.huginn().get_bytes("/gjallarhorn/sound", sound=sound), quiet=True)
+        if data:
+            st.audio(data, format="audio/wav")
+    elif sound == "none":
+        st.caption("This severity is silent (Sounds, below).")
+    ready = to == "everyone" or bool(who)
+    target = "every trader" if to == "everyone" else ", ".join(who) or "nobody yet"
+    if st.button(f"Send a {TEST_SEVERITIES[sev].lower()} test to {target}", icon=":material/notifications_active:",
+                 key="gj_test", disabled=not ready, type="primary"):
+        if c.call(lambda: c.huginn().post("/gjallarhorn/test", {"audience": who, "severity": sev})):
+            st.toast(f"Test pop-up sent to {target}", icon=":material/check:")
 
 
 def _sounds(g: dict) -> None:

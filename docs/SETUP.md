@@ -384,8 +384,9 @@ writes acknowledgements back.
 2. **Publish the app**: copies Gjallarhorn into the folder's `app` subfolder.
    Publish again after an upgrade: traders get the new version at their next
    logon, or when they press Restart.
-3. **Send a test**: a test pop-up for everyone, or for some desks or Windows
-   user names.
+3. **Send a test pop-up**: pick its severity (you hear its sound), and send it
+   to every trader or to chosen desks or Windows user names (the ones your
+   alerts use are offered; type any other).
 4. **On each trader's PC**, once, as that trader (no admin rights), the
    command Bifrost shows:
 
