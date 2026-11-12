@@ -195,9 +195,33 @@ def _email() -> None:
         sender = st.text_input("Sender address", value=s.get("sender", ""), placeholder="heimdall@company.com",
                                help="The address alert emails come from")
         if st.form_submit_button("Save", type="primary", icon=":material/save:"):
-            if c.call(lambda: c.huginn().put("/settings", {"smtp": {"host": host.strip(), "port": int(port),
-                                                                    "sender": sender.strip()}})):
+            if c.call(lambda: c.huginn().put("/settings", {"smtp": s | {"host": host.strip(), "port": int(port),
+                                                                        "sender": sender.strip()}})):
                 st.toast("Email settings saved", icon=":material/check:")
+    _prefixes(s)
+
+
+def _prefixes(s: dict) -> None:
+    """Subject prefixes: "[Heimdall] Price outside limits: TRIGGERED", or one of your own."""
+    from heimdall.core.models import clean_prefix
+    from heimdall.core.notify import prefixes
+    current = prefixes({"smtp": s})
+    with st.form("prefixes", border=True):
+        st.markdown("**Subject prefixes**")
+        st.caption("What starts each alert email's subject, in brackets: `[APAC QUANT TEAM] Price outside "
+                   "limits: TRIGGERED`. Each alert picks one (Edit → Notify), or takes the default.")
+        text = st.text_area("Prefixes, one per line", value="\n".join(current), height=120,
+                            placeholder="Heimdall\nAPAC QUANT TEAM\nCOVERAGE")
+        typed = [p for p in dict.fromkeys(clean_prefix(x) for x in text.splitlines()) if p]
+        default = st.selectbox("Default", typed or ["Heimdall"],
+                               index=(typed.index(current[0]) if current[0] in typed else 0),
+                               help="For alerts that do not pick one. Save the list first to choose a new one.")
+        if st.form_submit_button("Save prefixes", icon=":material/save:"):
+            chosen = default if default in typed else (typed[0] if typed else "Heimdall")
+            if c.call(lambda: c.huginn().put("/settings", {"smtp": s | {"prefixes": typed or ["Heimdall"],
+                                                                        "prefix": chosen}})):
+                st.toast("Prefixes saved", icon=":material/check:")
+                st.rerun()
 
 
 # -- gjallarhorn ------------------------------------------------------------------

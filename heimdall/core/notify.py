@@ -15,8 +15,8 @@ from typing import Callable, Optional
 import pandas as pd
 
 from heimdall.core import conditions, cron
-from heimdall.core.evaluate import Evaluation
-from heimdall.core.models import ROW_TRIGGERS, Alert
+from heimdall.core.evaluate import Evaluation, severity_of
+from heimdall.core.models import DEFAULT_PREFIX, ROW_TRIGGERS, Alert, clean_prefix
 
 SEVERITY_COLOURS = {"critical": "#c62828", "warning": "#b26a00", "info": "#1f6fb2"}
 TABLE_ROWS = 20                            # rows in the body of a mail not about rows
@@ -58,17 +58,42 @@ class Delivery:
     error: str = ""
 
 
-def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "") -> Message:
+def mail_prefix(settings: Optional[dict]) -> str:
+    """The default subject prefix (Settings, Email)."""
+    return clean_prefix(((settings or {}).get("smtp") or {}).get("prefix")) or DEFAULT_PREFIX
+
+
+def prefixes(settings: Optional[dict]) -> list[str]:
+    """Every subject prefix to choose from, the default first."""
+    s = (settings or {}).get("smtp") or {}
+    out: list[str] = []
+    for p in [mail_prefix(settings)] + list(s.get("prefixes") or []):
+        p = clean_prefix(p)
+        if p and p.lower() not in {o.lower() for o in out}:
+            out.append(p)
+    return out
+
+
+def subject_of(alert: Alert, prefix: str = DEFAULT_PREFIX) -> str:
+    """"[<prefix>] <alert name>": the alert's own prefix, else the default; or its own subject."""
+    return alert.channels.subject.strip() or f"[{alert.channels.prefix or prefix or DEFAULT_PREFIX}] {alert.name}"
+
+
+def compose(alert: Alert, ev: Evaluation, kind: str, bifrost_url: str = "",
+            prefix: str = DEFAULT_PREFIX) -> Message:
     label = {"trigger": "TRIGGERED", "error": "ERROR", "recovery": "RECOVERED"}[kind]
-    subject = (alert.channels.subject.strip() or f"[Heimdall] {alert.name}") + f": {label}"
+    subject = subject_of(alert, prefix) + f": {label}"
+    severity = severity_of(alert, ev)
     if kind == "trigger":
-        subject = f"[{alert.severity.upper()}] " + subject      # sorts and filters in a mailbox
+        subject = f"[{severity.upper()}] " + subject            # sorts and filters in a mailbox
     lines = [f"{alert.name}: {label}"]
     if alert.description:
         lines.append(alert.description)
     if kind == "trigger":
         lines.append(conditions.describe(alert.condition, ev.judged_step) + ".")
         lines.append(f"{ev.row_count} row(s) in '{ev.judged_step}'.")
+        if alert.severity_rules and getattr(ev, "severity_why", ""):
+            lines.append(f"Severity {severity}: {ev.severity_why}.")
         if ev.moves:
             lines.append("Firing again because " + "; ".join(ev.moves) + ".")
     elif kind == "error":
@@ -125,9 +150,10 @@ def _csv_attachment(alert: Alert, table: pd.DataFrame) -> tuple[Attachment, str]
 
 def _html(alert, ev, kind, label, lines, table: Optional[pd.DataFrame], limit: Optional[int], url,
           where_rest: str = "") -> str:
-    colour = {"trigger": SEVERITY_COLOURS.get(alert.severity, "#c62828"), "error": "#ef6c00", "recovery": "#2e7d32"}[kind]
+    severity = severity_of(alert, ev)
+    colour = {"trigger": SEVERITY_COLOURS.get(severity, "#c62828"), "error": "#ef6c00", "recovery": "#2e7d32"}[kind]
     if kind == "trigger":
-        label = f"{label} · {alert.severity.upper()}"
+        label = f"{label} · {severity.upper()}"
     parts = [f'<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1d2433">',
              f'<div style="border-left:4px solid {colour};padding:4px 12px;margin-bottom:12px">',
              f'<div style="font-size:12px;letter-spacing:.08em;color:{colour};font-weight:600">{label}</div>',
@@ -164,7 +190,7 @@ def fill(template: str, values: dict) -> str:
 
 
 def compose_all_clear(alert: Alert, *, checks: int, since: datetime, until: datetime,
-                      rows: Optional[int], bifrost_url: str = "") -> Message:
+                      rows: Optional[int], bifrost_url: str = "", prefix: str = DEFAULT_PREFIX) -> Message:
     ac = alert.channels.all_clear
     tz = cron.zone(alert.active_hours.tz)
     stamp = lambda dt: dt.astimezone(tz).strftime("%Y-%m-%d %H:%M")   # noqa: E731
@@ -174,7 +200,7 @@ def compose_all_clear(alert: Alert, *, checks: int, since: datetime, until: date
     if ac.subject.strip():
         subject = " ".join(fill(ac.subject, values).split())
     else:
-        subject = (alert.channels.subject.strip() or f"[Heimdall] {alert.name}") + ": ALL CLEAR"
+        subject = subject_of(alert, prefix) + ": ALL CLEAR"
     if ac.body.strip():
         body = fill(ac.body, values)
     elif ac.mode == "every_check":

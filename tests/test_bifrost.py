@@ -261,6 +261,59 @@ def test_builder_sends_pop_ups_to_a_group(wired, store, tmp_path):
     assert store.alert(alert.id).channels.gjallarhorn.audience == ["Equities", "bwayne"]
 
 
+def test_builder_sets_the_severity_from_the_result(wired, store):
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    at.radio(key=next(r.key for r in at.radio if r.label == "Severity")).set_value("rules").run()
+    assert not at.exception, at.exception
+    # starts from the example: > 100 critical, >= 50 warning, >= 10 info, otherwise don't send
+    assert [s.value for s in at.selectbox if s.label == "Then"] == ["critical", "warning", "info"]
+    assert next(s for s in at.selectbox if s.label == "Otherwise").value == "skip"
+    _button(at, "Add a rule").click().run()
+    last = lambda label: [w for w in at.selectbox if w.label == label][-1]   # noqa: E731
+    last("Else if").set_value("any_row").run()
+    ops = last("Is").options
+    assert "contains" in ops and "does not contain" in ops
+    [t for t in at.text_input if t.label == "Column"][-1].set_value("status").run()   # no test run: typed
+    last("Is").set_value("contains").run()
+    [t for t in at.text_input if t.label == "Value"][-1].set_value("REJECTED").run()
+    last("Then").set_value("critical").run()
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    saved = store.alert(alert.id)
+    assert [(r.measure, r.op, r.value, r.severity) for r in saved.severity_rules] == [
+        ("rows", ">", 100, "critical"), ("rows", ">=", 50, "warning"), ("rows", ">=", 10, "info"),
+        ("any_row", "contains", "REJECTED", "critical")]
+    assert saved.severity_rules[3].column == "status"
+    assert saved.severity_else == "skip"
+
+
+def test_subject_prefixes_in_settings_and_on_an_alert(wired, store):
+    store.set_settings({"smtp": {"host": "mail.example.com", "port": 25, "sender": "h@example.com"}})
+    at = _page("settings").run()
+    at.segmented_control(key="set_view").set_value("Email").run()
+    assert not at.exception, at.exception
+    next(t for t in at.text_area if t.label == "Prefixes, one per line").set_value(
+        "Heimdall\n[APAC QUANT TEAM]\nCOVERAGE")
+    _button(at, "Save prefixes").click().run()
+    assert not at.exception, at.exception
+    smtp = store.get_setting("smtp")
+    assert smtp["prefixes"] == ["Heimdall", "APAC QUANT TEAM", "COVERAGE"] and smtp["prefix"] == "Heimdall"
+    assert smtp["host"] == "mail.example.com"                          # the server settings are kept
+    next(s for s in at.selectbox if s.label == "Default").set_value("COVERAGE")
+    _button(at, "Save prefixes").click().run()
+    assert store.get_setting("smtp")["prefix"] == "COVERAGE"
+
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    pick = next(s for s in at.selectbox if s.label == "Subject prefix")
+    assert pick.value == "" and "[COVERAGE] (the default)" in pick.options
+    pick.set_value("APAC QUANT TEAM").run()
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    assert store.alert(alert.id).channels.prefix == "APAC QUANT TEAM"
+
+
 def test_builder_saves_a_renotify_on_move_rule(wired, store):
     alert, at = _open_builder(store, "Market-data feed")
     at.segmented_control[0].set_value("Trigger").run()

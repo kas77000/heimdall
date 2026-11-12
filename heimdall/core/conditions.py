@@ -7,13 +7,15 @@ from typing import Optional
 
 import pandas as pd
 
-from heimdall.core.models import Condition, Rearm
+from heimdall.core.models import TEXT_OPS, Alert, Condition, Rearm, SeverityRule
 
 _OPS = {"=": operator.eq, "<>": operator.ne, "<": operator.lt,
         "<=": operator.le, ">": operator.gt, ">=": operator.ge}
 _AGG = {"max": "max", "min": "min", "avg": "mean", "sum": "sum", "count": "count"}
 _WORDS = {"=": "equals", "<>": "is not", "<": "is below", "<=": "is at most",
-          ">": "is above", ">=": "is at least"}
+          ">": "is above", ">=": "is at least", "contains": "contains", "not_contains": "does not contain",
+          "starts_with": "starts with", "ends_with": "ends with"}
+_SIGNS = {"=": "=", "<>": "≠", "<": "<", "<=": "≤", ">": ">", ">=": "≥"}
 
 
 class ConditionError(ValueError):
@@ -30,11 +32,41 @@ def _coerce(series: pd.Series, value):
     return value
 
 
-def _col(df: pd.DataFrame, cond: Condition) -> pd.Series:
+def _col(df: pd.DataFrame, cond, what: str = "the condition's") -> pd.Series:
     if cond.column not in df.columns:
-        raise ConditionError(f"the condition's column '{cond.column}' is not in the result "
+        raise ConditionError(f"{what} column '{cond.column}' is not in the result "
                              f"(columns: {', '.join(map(str, df.columns)) or 'none'})")
     return df[cond.column]
+
+
+def compare(op: str, left, value):
+    """``left op value``, for a column (a boolean Series) or a single value (a bool).
+    The text comparisons ignore case and read any value as text."""
+    if op in TEXT_OPS:
+        needle = str(value).lower()
+        if isinstance(left, pd.Series):
+            text = left.astype("string").fillna("").str.lower()
+            hits = {"contains": lambda: text.str.contains(needle, regex=False),
+                    "not_contains": lambda: ~text.str.contains(needle, regex=False),
+                    "starts_with": lambda: text.str.startswith(needle),
+                    "ends_with": lambda: text.str.endswith(needle)}[op]()
+            return hits.fillna(False).astype(bool)
+        text = "" if left is None or (isinstance(left, float) and pd.isna(left)) else str(left).lower()
+        return {"contains": needle in text, "not_contains": needle not in text,
+                "starts_with": text.startswith(needle), "ends_with": text.endswith(needle)}[op]
+    if isinstance(left, pd.Series):
+        return _OPS[op](left, _coerce(left, value))
+    if isinstance(left, str) or isinstance(value, str):
+        try:
+            left, value = float(left), float(value)
+        except (TypeError, ValueError):
+            left, value = str(left), str(value)      # = and <> on text are exact, as on a column
+    return bool(_OPS[op](left, value))
+
+
+def _number_op(op: str, what: str) -> None:
+    if op in TEXT_OPS:
+        raise ConditionError(f"'{_WORDS[op]}' compares text; {what} is a number")
 
 
 def evaluate(cond: Condition, df: pd.DataFrame) -> bool:
@@ -44,14 +76,16 @@ def evaluate(cond: Condition, df: pd.DataFrame) -> bool:
     if cond.type == "no_rows":
         return n == 0
     if cond.type == "row_count":
+        _number_op(cond.op, "the number of rows")
         return bool(_OPS[cond.op](n, float(cond.value)))
     if cond.type in ("any_row", "all_rows"):
         if n == 0:
             return False
         col = _col(df, cond)
-        hits = _OPS[cond.op](col, _coerce(col, cond.value))
+        hits = compare(cond.op, col, cond.value)
         return bool(hits.any() if cond.type == "any_row" else hits.all())
     if cond.type == "aggregate":
+        _number_op(cond.op, f"the {cond.agg} of {cond.column}")
         col = _col(df, cond)
         if cond.agg == "count":
             agg = int(col.count())
@@ -73,9 +107,79 @@ def matching_rows(cond: Condition, df: pd.DataFrame) -> Optional[pd.DataFrame]:
         return None
     col = df[cond.column]
     try:
-        return df[_OPS[cond.op](col, _coerce(col, cond.value))]
+        return df[compare(cond.op, col, cond.value)]
     except Exception:  # noqa: BLE001
         return None
+
+
+# -- severity from the result ---------------------------------------------------------
+
+SEVERITY_WORDS = {"info": "Info", "warning": "Warning", "critical": "Critical", "skip": "Don't send"}
+
+
+def _show(v) -> str:
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return f"{v:,}" if isinstance(v, (int, float)) and not isinstance(v, bool) else repr(str(v))
+
+
+def rule_value(rule: SeverityRule, df: pd.DataFrame):
+    """What a rule compares: a number, a text, or (any_row) the column itself."""
+    if rule.measure == "rows":
+        _number_op(rule.op, "the number of rows")
+        return len(df)
+    if rule.measure == "any_row":
+        return _col(df, rule, "a severity rule's")
+    if rule.measure == "value":
+        _number_op(rule.op, f"the {rule.agg} of {rule.column or '...'}")
+        col = pd.to_numeric(_col(df, rule, "a severity rule's"), errors="coerce")
+        v = getattr(col, _AGG[rule.agg])()
+        return None if pd.isna(v) else float(v)
+    # text: the result's value
+    if df.empty:
+        return None
+    col = _col(df, rule, "a severity rule's") if rule.column else df.iloc[:, 0]
+    v = col.iloc[0]
+    return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
+
+
+def rule_matches(rule: SeverityRule, df: pd.DataFrame) -> tuple[bool, str]:
+    """Whether the rule applies, and in words what was found (for the mail and the pop-up)."""
+    v = rule_value(rule, df)
+    sign = _SIGNS.get(rule.op) or _WORDS[rule.op]
+    if rule.measure == "any_row":
+        if df.empty:
+            return False, ""
+        n = int(compare(rule.op, v, rule.value).sum())
+        return n > 0, f"{n} row{'s' if n != 1 else ''} with {rule.column} {sign} {_show(rule.value)}"
+    if v is None:
+        return False, ""
+    if rule.measure == "text" or rule.op in TEXT_OPS:
+        hit = compare(rule.op, v, rule.value)
+    else:
+        try:
+            hit = bool(_OPS[rule.op](float(v), float(rule.value)))
+        except (TypeError, ValueError):
+            raise ConditionError(f"a severity rule compares a number with '{rule.value}'") from None
+    what = {"rows": f"{_show(v)} rows", "value": f"{rule.agg} {rule.column} {_show(v)}",
+            "text": f"the result {_show(v)}"}[rule.measure]
+    return hit, f"{what} {sign} {_show(rule.value)}"
+
+
+def grade(alert: Alert, df: pd.DataFrame) -> tuple[str, str]:
+    """The severity of a result under the alert's rules: (info|warning|critical|skip, why)."""
+    for rule in alert.severity_rules:
+        hit, why = rule_matches(rule, df)
+        if hit:
+            return rule.severity, why
+    return alert.severity_else, "no severity rule matched"
+
+
+def describe_rule(rule: SeverityRule) -> str:
+    what = {"rows": "the number of rows", "any_row": f"any row's {rule.column or '...'}",
+            "value": f"the {rule.agg} of {rule.column or '...'}",
+            "text": "the result" + (f" ({rule.column})" if rule.column else "")}[rule.measure]
+    return f"{what} {_WORDS[rule.op]} {_show(rule.value)}: {SEVERITY_WORDS[rule.severity]}"
 
 
 def describe(cond: Condition, last_step: str = "") -> str:

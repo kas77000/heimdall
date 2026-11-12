@@ -15,7 +15,7 @@ from heimdall.core.chain import Pool, frame_to_records
 from heimdall.core.evaluate import AlertState, Evaluation, evaluate_alert
 from heimdall.core.kdb import PyKxClient
 from heimdall.core.models import Alert
-from heimdall.core.notify import Delivery, SmtpSettings, compose, compose_all_clear, deliver
+from heimdall.core.notify import Delivery, SmtpSettings, compose, compose_all_clear, mail_prefix, deliver
 from heimdall import gjallarhorn
 from heimdall.muninn.store import Muninn, iso, parse_iso, utcnow
 
@@ -130,7 +130,7 @@ class Engine:
             was_off = bool((states.get(a.id) or {}).get("off_hours"))
             inside = hours.is_active(a.active_hours, now)
             if a.enabled and not inside and not was_off:
-                self.store.update_state(a.id, off_hours=1, last_triggered=0, last_triggered_hash="",
+                self.store.update_state(a.id, off_hours=1, last_triggered=0, last_triggered_hash="", severity=None,
                                        delta_ref=None)
                 opens = hours.next_open(a.active_hours, now)
                 when = opens.astimezone(cron.zone(a.active_hours.tz)).strftime("%a %d %b %H:%M")                     if opens else "never"
@@ -182,7 +182,8 @@ class Engine:
                           last_notified_at=parse_iso(s.get("last_notified_at")),
                           last_triggered_hash=s.get("last_triggered_hash") or "",
                           consecutive_errors=int(s.get("consecutive_errors") or 0),
-                          delta_ref=json.loads(s["delta_ref"]) if s.get("delta_ref") else None)
+                          delta_ref=json.loads(s["delta_ref"]) if s.get("delta_ref") else None,
+                          severity=s.get("severity") or "")
 
     def _execute(self, alert: Alert, source: str) -> int:
         started = self.clock()
@@ -206,6 +207,10 @@ class Engine:
             period["delta_ref"] = json.dumps(ev.delta_value)
         elif ev.status == "ok" and not ev.condition_met:
             period["delta_ref"] = None
+        if ev.notify == "trigger":
+            period["severity"] = ev.severity
+        elif ev.status == "ok" and not ev.condition_met:
+            period["severity"] = None
         if period:
             self.store.update_state(alert.id, **period)
         if ev.notify:
@@ -217,8 +222,8 @@ class Engine:
 
     def _notify(self, alert: Alert, ev: Evaluation, run_id: int) -> None:
         url = f"{self.cfg.bifrost_url.rstrip('/')}/history?run={run_id}" if self.cfg.bifrost_url else ""
-        msg = compose(alert, ev, ev.notify, url)
         settings = self.store.settings()
+        msg = compose(alert, ev, ev.notify, url, prefix=mail_prefix(settings))
         # A recovery asked for only as a pop-up does not mail.
         mail = ev.notify != "recovery" or alert.channels.notify_on_recovery
         deliveries = deliver(alert, msg, smtp_from(settings), **self._deliver_kw) if mail else []
@@ -292,9 +297,10 @@ class Engine:
     def _send_all_clear(self, alert: Alert, ev: Evaluation, run_id: int, now: datetime, *,
                         checks: int, since: datetime) -> None:
         url = f"{self.cfg.bifrost_url.rstrip('/')}/history?run={run_id}" if self.cfg.bifrost_url else ""
+        settings = self.store.settings()
         msg = compose_all_clear(alert, checks=checks, since=since, until=now, rows=ev.row_count,
-                                bifrost_url=url)
-        deliveries = deliver(alert, msg, smtp_from(self.store.settings()), **self._deliver_kw)
+                                bifrost_url=url, prefix=mail_prefix(settings))
+        deliveries = deliver(alert, msg, smtp_from(settings), **self._deliver_kw)
         if deliveries:
             self.store.record_deliveries(run_id, "all_clear", deliveries)
 
@@ -316,9 +322,10 @@ class Engine:
         sample = pd.DataFrame({"note": ["This is a test notification from Heimdall."]})
         ev = Ev("triggered", True, True, "trigger", f"{alert.name}: test", judged_step="test",
                 judged=sample)
-        msg = compose(alert, ev, "trigger", self.cfg.bifrost_url)
+        settings = self.store.settings()
+        msg = compose(alert, ev, "trigger", self.cfg.bifrost_url, prefix=mail_prefix(settings))
         msg.subject = "[TEST] " + msg.subject
-        return [d.__dict__ for d in deliver(alert, msg, smtp_from(self.store.settings()), **self._deliver_kw)]
+        return [d.__dict__ for d in deliver(alert, msg, smtp_from(settings), **self._deliver_kw)]
 
     # -- retention -------------------------------------------------------------
 

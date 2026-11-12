@@ -185,6 +185,10 @@ STEP_KINDS = {"kdb": KdbStep, "bloomberg": BloombergStep,
 COMPARE_OPS = ("=", "<>", "<", "<=", ">", ">=")
 CONDITION_TYPES = ("has_rows", "no_rows", "row_count", "any_row", "all_rows", "aggregate")
 AGGREGATES = ("min", "max", "avg", "sum", "count")
+# Comparisons: numbers and text alike for the first six; the text ones ignore case.
+TEXT_OPS = ("contains", "not_contains", "starts_with", "ends_with")
+OPS = ("=", "<>", "<", "<=", ">", ">=") + TEXT_OPS
+Op = Literal["=", "<>", "<", "<=", ">", ">=", "contains", "not_contains", "starts_with", "ends_with"]
 
 
 class Condition(BaseModel):
@@ -192,9 +196,27 @@ class Condition(BaseModel):
                   "aggregate"] = "has_rows"
     step: str = ""                   # empty = the last step
     column: str = ""
-    op: Literal["=", "<>", "<", "<=", ">", ">="] = ">"
+    op: Op = ">"
     value: Union[float, int, str] = 0
     agg: Literal["min", "max", "avg", "sum", "count"] = "max"
+
+
+class SeverityRule(BaseModel):
+    """One line of "severity from the result": when the measure compares, this severity.
+
+    ``measure``:
+      rows     the number of rows                       (op, value)
+      any_row  a row whose ``column`` compares          (op, value; text ops too)
+      value    the ``agg`` of a numeric ``column``      (op, value)
+      text     the result's value: the first cell of ``column`` (or of the first column)
+    ``severity`` "skip": the run does not count as firing; nothing is sent.
+    """
+    measure: Literal["rows", "any_row", "value", "text"] = "rows"
+    column: str = ""
+    agg: Literal["max", "min", "avg", "sum"] = "max"
+    op: Op = ">"
+    value: Union[float, int, str] = 0
+    severity: Literal["info", "warning", "critical", "skip"] = "warning"
 
 
 class Rearm(BaseModel):
@@ -297,7 +319,8 @@ class Gjallarhorn(BaseModel):
 class Channels(BaseModel):
     email_to: list[str] = Field(default_factory=list)
     gjallarhorn: Gjallarhorn = Field(default_factory=Gjallarhorn)
-    subject: str = ""                # empty = "[Heimdall] <alert name>"
+    subject: str = ""                # empty = "[<prefix>] <alert name>"
+    prefix: str = ""                 # empty = the default prefix (Settings, Email); "Heimdall" out of the box
     notify_on_error: bool = False
     error_after: int = 3             # consecutive errors before an error notifies
     notify_on_recovery: bool = False
@@ -312,6 +335,22 @@ class Channels(BaseModel):
     @classmethod
     def _all_rows(cls, v):
         return None if v in (0, "", None) else v      # 0 once meant every row
+
+    @field_validator("prefix")
+    @classmethod
+    def _prefix(cls, v: str) -> str:
+        return clean_prefix(v)
+
+
+DEFAULT_PREFIX = "Heimdall"
+
+
+def clean_prefix(v) -> str:
+    """A subject prefix as typed: "[APAC QUANT TEAM]" or "APAC QUANT TEAM" -> "APAC QUANT TEAM"."""
+    v = " ".join(str(v or "").split())
+    while v.startswith("[") and v.endswith("]"):
+        v = v[1:-1].strip()
+    return v
 
 
 HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -356,6 +395,10 @@ class Alert(BaseModel):
     owner: str = ""
     group: str = ""                  # one group per alert; empty = ungrouped
     severity: Literal["info", "warning", "critical"] = "warning"
+    # Severity from the result: the first rule that matches decides; none = ``severity_else``.
+    # No rule: the fixed ``severity`` above.
+    severity_rules: list[SeverityRule] = Field(default_factory=list)
+    severity_else: Literal["info", "warning", "critical", "skip"] = "skip"
     sound: str = ""                  # see SEVERITIES above; empty = the severity's default
     tags: list[str] = Field(default_factory=list)
     enabled: bool = False

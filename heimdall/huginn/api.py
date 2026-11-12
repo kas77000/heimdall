@@ -112,7 +112,11 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
             unack = store.count_runs(alert_id=a.id, unacknowledged=True)
             alerts.append({
                 "id": a.id, "name": a.name, "enabled": a.enabled, "interval_secs": a.interval_secs,
-                "tags": a.tags, "owner": a.owner, "group": a.group, "severity": a.severity,
+                "tags": a.tags, "owner": a.owner, "group": a.group,
+                # from the result: the severity of the current firing, if it is firing
+                "severity": (st.get("severity") if a.severity_rules and st.get("last_triggered") else None)
+                or a.severity,
+                "severity_from_result": bool(a.severity_rules),
                 "running": a.id in inflight,
                 "off_hours": a.enabled and not hours.is_active(a.active_hours, now),
                 "active_hours": hours.describe(a.active_hours),

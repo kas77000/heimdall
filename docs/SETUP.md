@@ -283,6 +283,14 @@ copy from.
 
 Mail goes through the company relay without a login or TLS, as in KdbMonitor.
 
+**Subject prefixes**: what starts each alert email's subject, in brackets
+(`[Heimdall] Price outside limits: TRIGGERED` out of the box). List your own,
+one per line (`APAC QUANT TEAM`, `COVERAGE`; brackets are added for you), and
+pick the default. Each alert then chooses one in Notify → **Subject prefix**,
+or takes the default; it goes on firing, cleared, error, all-clear and test
+mails alike (`[CRITICAL] [APAC QUANT TEAM] Price outside limits: TRIGGERED`).
+An alert with a **Subject** of its own uses that instead of prefix and name.
+
 In the Builder's **Notify** section, **Send a test notification** sends a test
 email through these settings, so you can check them immediately.
 
@@ -428,6 +436,30 @@ writes acknowledgements back.
   (`[CRITICAL] [Heimdall] Price outside limits: TRIGGERED`), and sets how a
   pop-up behaves: *Info* fades after a few seconds, *Warning* after 25 seconds
   unless the trader is reading it, *Critical* stays until the trader acts on it.
+- **Severity from the result** (instead of *Always the same*): rules checked
+  from the top on each firing; the first that matches sets its severity,
+  and *Otherwise* covers the rest. A rule looks at the **number of rows**, **a
+  row's column** (any row whose `status` contains `REJECTED`), **a column's
+  total** (max, min, average or sum) or **the result's value** (an alert whose
+  result is one text or number). Comparisons: =, ≠, <, ≤, >, ≥, and for text
+  *contains*, *does not contain*, *starts with*, *ends with* (these ignore
+  upper and lower case; = on text is exact). For example:
+
+  | If | is | value | then |
+  |---|---|---|---|
+  | Number of rows | > | 100 | Critical |
+  | Number of rows | ≥ | 50 | Warning |
+  | Number of rows | ≥ | 10 | Info |
+  | Otherwise | | | Don't send |
+
+  *Don't send* means the check does not count as firing: nothing is sent,
+  History says *below the severity thresholds*, and if it was firing it
+  clears. While it keeps firing, a **rise** in severity always notifies again,
+  whatever *When it keeps firing* says ("it is now critical (120 rows > 100),
+  it was warning"); a fall does not. The mail and the pop-up say which rule
+  matched. The conditions *any row* / *every row* take the same text
+  comparisons, to fire on content alone (any row whose `status` contains
+  `REJECTED`).
 - **Sound**: what Gjallarhorn plays when the pop-up comes. By default, the
   severity's horn: Gjallarhorn's horn calls grow more urgent with the
   severity (one soft call, two blasts, three blasts with the last one held).

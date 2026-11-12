@@ -27,6 +27,9 @@ BBG_FIELDS = ["PX_LAST", "LAST_PRICE", "BID", "ASK", "VOLUME", "LIMIT_UP", "LIMI
               "PX_CLOSE_1D", "PX_OPEN", "NAME", "CRNCY", "EQY_SH_OUT", "CUR_MKT_CAP"]
 OPS = ["=", "<>", "<", "<=", ">", ">="]
 FILTER_OPS = OPS + ["in", "like"]
+TEXT_OP_LIST = ["contains", "not_contains", "starts_with", "ends_with"]
+OP_LABELS = {"=": "=", "<>": "≠", "<": "<", "<=": "≤", ">": ">", ">=": "≥", "contains": "contains",
+             "not_contains": "does not contain", "starts_with": "starts with", "ends_with": "ends with"}
 VALUE_TYPES = ["symbol", "number", "string", "date", "time", "expression"]
 INTERVALS = {"15s": 15, "30s": 30, "1 min": 60, "5 min": 300, "15 min": 900, "1 hour": 3600,
              "Schedule only": 0}
@@ -541,10 +544,13 @@ def _trigger(d: dict) -> None:
             else:
                 cond["column"] = r[1].text_input("Column", key=c.seed(K("c_col_t"), cond.get("column", "")),
                                                  help="Run a test to pick from the real columns")
-        cond["op"] = r[2].selectbox("Is", OPS, index=OPS.index(cond.get("op", ">")), key=K("c_op"))
+        ops = OPS + TEXT_OP_LIST if t in ("any_row", "all_rows") else OPS
+        cur = cond.get("op", ">") if cond.get("op", ">") in ops else ">"
+        cond["op"] = r[2].selectbox("Is", ops, index=ops.index(cur), format_func=OP_LABELS.get, key=K("c_op", t))
         raw = r[3].text_input("Value", key=c.seed(K("c_val"), str(cond.get("value", 0))))
         try:
-            cond["value"] = float(raw) if raw.strip() not in ("",) and _isnum(raw) else raw
+            cond["value"] = float(raw) if raw.strip() not in ("",) and _isnum(raw) and \
+                cond["op"] not in TEXT_OP_LIST else raw
         except ValueError:
             cond["value"] = raw
     try:
@@ -635,8 +641,19 @@ def _notify(d: dict) -> None:
     ch["email_to"] = _lines(st.text_area("Email to", height=90,
                                          key=c.seed(K("n_to"), "\n".join(ch.get("email_to", []))),
                                          placeholder="one address per line"))
-    ch["subject"] = st.text_input("Subject", key=c.seed(K("n_subj"), ch.get("subject", "")),
-                                  placeholder=f"[Heimdall] {d['name']}")
+    from heimdall.core.notify import prefixes
+    settings = c.call(lambda: c.huginn().get("/settings"), quiet=True) or {}
+    known = prefixes(settings)
+    current = ch.get("prefix", "")
+    options = [""] + known[1:] + ([current] if current and current not in known[1:] else [])
+    a, b = st.columns([1, 2])
+    ch["prefix"] = a.selectbox("Subject prefix", options,
+                               format_func=lambda p: f"[{p}]" if p else f"[{known[0]}] (the default)",
+                               key=c.seed(K("n_prefix"), current),
+                               help="Set the prefixes and the default in Settings → Email")
+    ch["subject"] = b.text_input("Subject", key=c.seed(K("n_subj"), ch.get("subject", "")),
+                                 placeholder=f"[{ch['prefix'] or known[0]}] {d['name']}",
+                                 help="Empty: the prefix and the alert's name. A subject of your own replaces both.")
     _rows_in_mail(d, ch)
     a, b, h = st.columns(3)
     ch["notify_on_error"] = a.toggle("Tell me when it keeps failing", key=c.seed(K("n_err"), ch.get("notify_on_error", False)))
@@ -664,10 +681,25 @@ SOUNDS = {"": "Default for its severity", "none": "Silent",
           "system:hand": "Windows: Critical stop", "system:beep": "Windows: Beep", "system:question": "Windows: Question"}
 
 
+SEV_MODES = {"fixed": "Always the same", "rules": "From the result"}
+RULE_MEASURES = {"rows": "Number of rows", "any_row": "A row's column", "value": "A column's total",
+                 "text": "The result's value"}
+RULE_SEVERITIES = {"critical": "Critical", "warning": "Warning", "info": "Info", "skip": "Don't send"}
+
+
 def _severity(d: dict) -> None:
-    """How serious the alert is, and what it sounds like on traders' screens."""
+    """How serious the alert is (fixed, or from the result), and what it sounds like."""
+    mode = st.radio("Severity", list(SEV_MODES), format_func=SEV_MODES.get, horizontal=True,
+                    key=c.seed(K("sev_mode"), "rules" if d.get("severity_rules") else "fixed"),
+                    help="From the result: rules on the number of rows, a column or the value pick the "
+                         "severity of each firing, or decide not to send it")
+    if mode == "rules":
+        _severity_rules(d)
+    else:
+        d["severity_rules"] = []
     a, b = st.columns([1, 2])
-    d["severity"] = a.segmented_control("Severity", list(SEVERITY), format_func=SEVERITY.get,
+    d["severity"] = a.segmented_control("Severity" if mode == "fixed" else "In lists, until it fires",
+                                        list(SEVERITY), format_func=SEVERITY.get,
                                         key=c.seed(K("sev"), d.get("severity", "warning")),
                                         help="Shown in Overview and Alerts, at the start of a firing's email subject, "
                                              "and on traders' pop-ups") or "warning"
@@ -687,6 +719,68 @@ def _severity(d: dict) -> None:
             b.audio(data, format="audio/wav")
     elif actual.startswith("system:"):
         b.caption("A Windows sound: it plays on the trader's PC, not here.")
+
+
+def _severity_rules(d: dict) -> None:
+    """Rules checked top to bottom on a firing's result; the first that matches sets the severity."""
+    rules = d.setdefault("severity_rules", [])
+    if not rules and not st.session_state.get(K("sev_rules_seeded")):
+        rules += [{"measure": "rows", "column": "", "agg": "max", "op": ">", "value": 100, "severity": "critical"},
+                  {"measure": "rows", "column": "", "agg": "max", "op": ">=", "value": 50, "severity": "warning"},
+                  {"measure": "rows", "column": "", "agg": "max", "op": ">=", "value": 10, "severity": "info"}]
+        d["severity_else"] = "skip"
+        st.session_state[K("sev_rules_seeded")] = True
+    steps = d.get("steps") or []
+    judged = (d.get("condition") or {}).get("step") or (steps[-1]["name"] if steps else "")
+    cols = _columns_of(judged) if judged else []
+    st.caption("Checked from the top on each firing: the first rule that matches sets its severity. "
+               "Text comparisons (contains, starts with…) ignore upper and lower case. "
+               "A rise in severity while it keeps firing always notifies again.")
+    for i, r in enumerate(list(rules)):
+        r.setdefault("_uid", _uid())
+        u = r["_uid"]
+        row = st.columns([1.5, 1.6, 1.2, 1.4, 1.2, 0.5], vertical_alignment="bottom")
+        r["measure"] = row[0].selectbox("If" if i == 0 else "Else if", list(RULE_MEASURES),
+                                        format_func=RULE_MEASURES.get, key=c.seed(K("sr_m", u), r.get("measure", "rows")))
+        m = r["measure"]
+        if m == "value":
+            sub = row[1].columns(2)
+            r["agg"] = sub[0].selectbox("Total", ["max", "min", "avg", "sum"],
+                                        key=c.seed(K("sr_a", u), r.get("agg", "max")))
+            r["column"] = _rule_column(sub[1], cols, r, u)
+        elif m in ("any_row", "text"):
+            r["column"] = _rule_column(row[1], cols, r, u, optional=m == "text")
+        ops = OPS + TEXT_OP_LIST if m in ("any_row", "text") else OPS
+        cur = r.get("op", ">") if r.get("op", ">") in ops else ops[0]
+        r["op"] = row[2].selectbox("Is", ops, format_func=OP_LABELS.get, key=c.seed(K("sr_o", u), cur))
+        raw = row[3].text_input("Value", key=c.seed(K("sr_v", u), str(r.get("value", ""))))
+        r["value"] = float(raw) if raw.strip() and _isnum(raw) and r["op"] not in TEXT_OP_LIST else raw
+        r["severity"] = row[4].selectbox("Then", list(RULE_SEVERITIES), format_func=RULE_SEVERITIES.get,
+                                         key=c.seed(K("sr_s", u), r.get("severity", "warning")))
+        if row[5].button("", icon=":material/delete:", key=K("sr_del", u), help="Remove this rule"):
+            rules.remove(r)
+            st.rerun()
+    a, b = st.columns([1, 2], vertical_alignment="bottom")
+    if a.button("Add a rule", icon=":material/add:", key=K("sr_add")):
+        rules.append({"_uid": _uid(), "measure": "rows", "column": "", "agg": "max", "op": ">=", "value": 1,
+                      "severity": "warning"})
+        st.rerun()
+    d["severity_else"] = b.selectbox("Otherwise", list(RULE_SEVERITIES), format_func=RULE_SEVERITIES.get,
+                                     key=c.seed(K("sr_else"), d.get("severity_else", "skip")),
+                                     help="When no rule matches. Don't send: the check does not count as firing.")
+    if not rules:
+        st.caption("No rule: every firing gets the *Otherwise* severity.")
+
+
+def _rule_column(where, cols: list[str], r: dict, u: str, optional: bool = False) -> str:
+    if cols:
+        options = ([""] if optional else []) + cols
+        cur = r.get("column") if r.get("column") in options else options[0]
+        return where.selectbox("Column", options, format_func=lambda x: x or "The first column",
+                               key=c.seed(K("sr_c", u), cur))
+    return where.text_input("Column", key=c.seed(K("sr_ct", u), r.get("column", "")),
+                            placeholder="first column" if optional else "",
+                            help="Run a test to pick from the real columns")
 
 
 def _pop_ups(d: dict, ch: dict) -> None:
@@ -769,7 +863,9 @@ def _all_clear(d: dict, ch: dict) -> None:
             if d.get("interval_secs") and ac["interval_secs"] <= d["interval_secs"]:
                 st.markdown(":orange[The period is not longer than the check interval, "
                             "so this mails after every clean check.]")
-        default_subject = (ch.get("subject") or f"[Heimdall] {d['name']}") + ": ALL CLEAR"
+        from heimdall.core.notify import mail_prefix
+        default = mail_prefix(c.call(lambda: c.huginn().get("/settings"), quiet=True) or {})
+        default_subject = (ch.get("subject") or f"[{ch.get('prefix') or default}] {d['name']}") + ": ALL CLEAR"
         ac["subject"] = st.text_input("Subject", key=c.seed(K("ac_subj"), ac.get("subject", "")),
                                       placeholder=default_subject)
         default_body = ("{alert} did not fire at {until}. Rows returned: {rows}." if ac["mode"] == "every_check"

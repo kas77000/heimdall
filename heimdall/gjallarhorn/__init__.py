@@ -163,9 +163,10 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
     """What a trader sees: no links to Bifrost, everything is in the file."""
     g = alert.channels.gjallarhorn
     recovery = kind == "recovery"
-    severity = "info" if recovery else alert.severity
+    from heimdall.core.evaluate import severity_of
+    severity = "info" if recovery else severity_of(alert, ev)
     sound = (settings or Settings()).sound_for("info") if recovery else \
-        (alert.sound or (settings or Settings()).sound_for(alert.severity))
+        (alert.sound or (settings or Settings()).sound_for(severity))
     lines = []
     if alert.description:
         lines.append(alert.description)
@@ -174,6 +175,8 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
         table = None
     else:
         lines.append(conditions.describe(alert.condition, ev.judged_step) + ".")
+        if alert.severity_rules and getattr(ev, "severity_why", ""):
+            lines.append(f"Severity {severity}: {ev.severity_why}.")
         if ev.moves:
             lines.append("Firing again because " + "; ".join(ev.moves) + ".")
         table = ev.matching if ev.matching is not None and not ev.matching.empty else ev.judged

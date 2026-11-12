@@ -12,7 +12,7 @@ import pandas as pd
 from heimdall.core import compute, hours, refs, scripts
 from heimdall.core.bloomberg import BloombergSource, BpipeSource, FakeBloomberg
 from heimdall.core.kdb import KdbClient, MockKdbClient, PyKxClient, build_q
-from heimdall.core.models import (Alert, BloombergStep, ComputeStep, Connection, KdbStep,
+from heimdall.core.models import (TEXT_OPS, Alert, BloombergStep, ComputeStep, Connection, KdbStep,
                                   Script, ScriptStep)
 
 
@@ -231,6 +231,19 @@ def validate(alert: Alert, connections: dict[str, Connection], scripts_by_name: 
         problems.append(f"The condition judges step '{target}', which does not exist.")
     if alert.condition.type in ("any_row", "all_rows", "aggregate") and not alert.condition.column:
         problems.append("The condition needs a column.")
+    if alert.condition.op in TEXT_OPS and alert.condition.type in ("row_count", "aggregate"):
+        problems.append("The condition compares a number: 'contains' and the other text comparisons "
+                        "only work on a row's column.")
+    for i, rule in enumerate(alert.severity_rules, start=1):
+        if rule.measure in ("any_row", "value") and not rule.column.strip():
+            problems.append(f"Severity rule {i}: choose a column.")
+        if rule.op in TEXT_OPS and rule.measure in ("rows", "value"):
+            problems.append(f"Severity rule {i}: a number cannot be compared as text.")
+        if rule.measure in ("rows", "value") and rule.op not in TEXT_OPS:
+            try:
+                float(rule.value)
+            except (TypeError, ValueError):
+                problems.append(f"Severity rule {i}: '{rule.value}' is not a number.")
     r = alert.rearm
     if r.mode == "delta":
         if r.delta_measure == "value" and not r.delta_column.strip():

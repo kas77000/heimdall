@@ -108,7 +108,9 @@ JSON records. See `examples/scripts/` for three small ones.
 
 Traders do not need Bifrost. Every alert has a **severity** (info, warning,
 critical: shown in Overview and Alerts, and at the start of a firing's email
-subject) and a **sound**, by default a horn call that grows more urgent with the
+subject), fixed or **from the result** (rules on the number of rows, a column
+or the value, e.g. more than 100 rows critical, under 10 not sent; a rise in
+severity notifies again) and a **sound**, by default a horn call that grows more urgent with the
 severity. An alert with **Pop up on traders' screens** on (for every trader or
 groups of traders set in Bifrost) makes Huginn write one file per firing to a shared folder. Gjallarhorn,
 running on each trader's PC, shows one card at the bottom right (never a stack:
