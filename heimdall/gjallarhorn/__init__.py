@@ -167,19 +167,27 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
     severity = "info" if recovery else severity_of(alert, ev)
     sound = (settings or Settings()).sound_for("info") if recovery else \
         (alert.sound or (settings or Settings()).sound_for(severity))
-    lines = []
+    # One section per kind of information, for the trader app to lay out; ``lines``
+    # keeps the same as plain sentences for older copies of the app.
+    details: list[dict] = []
     if alert.description:
-        lines.append(alert.description)
+        details.append({"kind": "about", "label": "About this alert", "text": alert.description})
     if recovery:
-        lines.append("The condition is no longer met.")
+        details.append({"kind": "cleared", "label": "Cleared", "text": "The condition is no longer met."})
         table = None
     else:
-        lines.append(conditions.describe(alert.condition, ev.judged_step) + ".")
+        rule = conditions.describe(alert.condition, ev.judged_step).removeprefix("Triggers when ")
+        details.append({"kind": "rule", "label": "Fires when", "text": rule + "."})   # starts with a step name
         if alert.severity_rules and getattr(ev, "severity_why", ""):
-            lines.append(f"Severity {severity}: {ev.severity_why}.")
+            details.append({"kind": "severity", "label": f"Why {severity}", "text": ev.severity_why[:1].upper()
+                            + ev.severity_why[1:] + "."})
         if ev.moves:
-            lines.append("Firing again because " + "; ".join(ev.moves) + ".")
+            details.append({"kind": "again", "label": "Firing again because",
+                            "text": "; ".join(m[:1].upper() + m[1:] for m in ev.moves) + "."})
         table = ev.matching if ev.matching is not None and not ev.matching.empty else ev.judged
+    lines = [d["text"] if d["kind"] in ("about", "cleared") else
+             ("Triggers when " + d["text"] if d["kind"] == "rule" else
+              f"{d['label']}: {d['text']}") for d in details]
     n = ev.row_count
     return {
         "schema": SCHEMA,
@@ -195,6 +203,7 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
         "summary": ("No longer firing" if recovery
                     else f"{n} row{'s' if n != 1 else ''}" if n is not None else "Fired"),
         "lines": lines,
+        "details": details,
         "audience": list(g.audience),               # as chosen, groups by name
         "recipients": recipients(settings, g.audience),
         "needs_ack": not recovery,
@@ -226,6 +235,12 @@ def publish_test(settings: Settings, audience: Iterable[str] = (), severity: str
             "severity": severity, "sound": settings.sound_for(severity), "title": "Gjallarhorn test",
             "summary": "3 rows", "lines": ["A test pop-up sent from Bifrost.",
                                            "Acknowledge it to check the way back to Huginn."],
+            "details": [{"kind": "about", "label": "About this alert", "text": "A test pop-up sent from Bifrost."},
+                        {"kind": "rule", "label": "Fires when", "text": "Someone presses Send a test pop-up."},
+                        {"kind": "severity", "label": f"Why {severity}",
+                         "text": f"It was sent as a {severity} test, to hear its horn."},
+                        {"kind": "todo", "label": "What to do",
+                         "text": "Acknowledge it: Bifrost then shows who did, which checks the way back."}],
             "audience": [a for a in audience if a], "recipients": recipients(settings, audience),
             "needs_ack": True,
             "fired_at": now.isoformat(timespec="seconds"), "rows": _rows(rows)}

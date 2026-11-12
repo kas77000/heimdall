@@ -158,7 +158,10 @@ def test_the_pop_up_takes_the_severity_and_its_horn(store, engine, sent, table, 
     (f,) = (tmp_path / "alerts").rglob("*.json")
     data = json.loads(f.read_text(encoding="utf-8"))
     assert (data["severity"], data["sound"]) == ("critical", "horn:critical")
-    assert "Severity critical: 150 rows > 100." in data["lines"]
+    assert [(d["kind"], d["label"], d["text"]) for d in data["details"]] == [
+        ("rule", "Fires when", "o returns any rows."),
+        ("severity", "Why critical", "150 rows > 100.")]
+    assert data["lines"] == ["Triggers when o returns any rows.", "Why critical: 150 rows > 100."]
 
 
 def test_an_alert_without_rules_keeps_its_fixed_severity(store, engine, sent, table):

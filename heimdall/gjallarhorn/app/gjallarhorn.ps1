@@ -85,6 +85,8 @@ function ConvertTo-GjItem($a) {
         title     = [string]$a.title
         summary   = [string]$a.summary
         lines     = @($a.lines | ForEach-Object { [string]$_ })
+        details   = @($a.details | Where-Object { $_ -and $_.text } |
+                ForEach-Object { [pscustomobject]@{ kind = [string]$_.kind; label = [string]$_.label; text = [string]$_.text } })
         audience  = @($a.audience | ForEach-Object { [string]$_ })
         columns   = @($(if ($rows) { $rows.columns } else { @() }))
         data      = @($(if ($rows) { $rows.data } else { @() }))
@@ -913,7 +915,10 @@ $InboxXaml = @"
           <StackPanel><TextBlock x:Name="M2L" Foreground="#B4B6C6" FontSize="13"/><TextBlock x:Name="M2V" FontSize="28" Margin="0,2,0,0"/></StackPanel>
           <StackPanel><TextBlock x:Name="M3L" Foreground="#B4B6C6" FontSize="13"/><TextBlock x:Name="M3V" FontSize="28" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
         </UniformGrid>
-        <TextBlock x:Name="DLines" Grid.Row="3" Foreground="#A9ABBC" FontSize="13.5" TextWrapping="Wrap" Margin="0,18,0,14"/>
+        <ScrollViewer x:Name="DLines" Grid.Row="3" Margin="0,18,0,14" MaxHeight="260"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="DInfo"/>
+        </ScrollViewer>
         <Border x:Name="DRowsBox" Grid.Row="4" BorderBrush="#2C2E3C" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
           <DataGrid x:Name="DRows" AutoGenerateColumns="True" IsReadOnly="True" HeadersVisibility="Column"
                     Background="#111219" RowBackground="#111219" AlternatingRowBackground="#14151E" Foreground="#E4E5EE"
@@ -995,7 +1000,7 @@ function New-ListHeader([string]$text) {
 
 function Test-Match($it, [string]$q) {
     if (-not $q) { return $true }
-    $hay = ($it.title, $it.group, $it.summary, ($it.lines -join " ")) -join " "
+    $hay = ($it.title, $it.group, $it.summary, ($it.lines -join " "), (@($it.details | ForEach-Object { $_.text }) -join " ")) -join " "
     return $hay.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
@@ -1065,6 +1070,96 @@ function New-Table($it) {
     return , $dt          # the comma: a DataTable returned bare would be unrolled into its rows
 }
 
+# The alert's information as cards: an icon, a small label, the text. Each kind has its
+# colour; the severity's reason takes the alert's own.
+$InfoKinds = @{
+    about    = @{ glyph = [char]0xE946; color = "#8B8EA0" }     # info
+    rule     = @{ glyph = [char]0xE71C; color = "#7765EA" }     # filter
+    severity = @{ glyph = [char]0xE7BA; color = "" }            # warning sign, the severity's colour
+    again    = @{ glyph = [char]0xE895; color = "#E8A33D" }     # sync
+    cleared  = @{ glyph = [char]0xE930; color = "#3ECF8E" }     # completed
+    todo     = @{ glyph = [char]0xE8FB; color = "#5AA9E6" }     # checklist
+}
+
+function Get-Details($it) {
+    if (@($it.details).Count) { return @($it.details) }
+    # older pop-up files: plain sentences
+    @($it.lines | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ kind = "about"; label = ""; text = [string]$_ } })
+}
+
+function Show-Info($it, [string]$severityColour) {
+    $panel = Get-InboxControl "DInfo"
+    $panel.Children.Clear()
+    # The description reads as a paragraph, full width; the short facts sit side by side under it.
+    $details = @(Get-Details $it)
+    $wide = @($details | Where-Object { @("about", "cleared") -contains $_.kind })
+    $short = @($details | Where-Object { @("about", "cleared") -notcontains $_.kind })
+    foreach ($d in $wide) { [void]$panel.Children.Add((New-InfoCard $d $severityColour)) }
+    if ($short.Count) {
+        $row = New-Object System.Windows.Controls.Primitives.UniformGrid
+        $row.Rows = 1
+        $row.Columns = $short.Count
+        foreach ($d in $short) {
+            $card = New-InfoCard $d $severityColour
+            $card.Margin = $(if ($d -eq $short[-1]) { "0,0,0,8" } else { "0,0,8,8" })
+            [void]$row.Children.Add($card)
+        }
+        [void]$panel.Children.Add($row)
+    }
+}
+
+function New-InfoCard($d, [string]$severityColour) {
+    & {
+        $k = $InfoKinds[[string]$d.kind]
+        if (-not $k) { $k = $InfoKinds["about"] }
+        $colour = if ($k.color) { $k.color } else { $severityColour }
+        $card = New-Object System.Windows.Controls.Border
+        $card.Background = Brush "#1A1B25"
+        $card.BorderBrush = Brush "#2C2E3C"
+        $card.BorderThickness = "1"
+        $card.CornerRadius = "6"
+        $card.Margin = "0,0,0,8"
+        $edge = New-Object System.Windows.Controls.Border     # a thin coloured edge on the left
+        $edge.Background = Brush $colour
+        $edge.Width = 3
+        $edge.CornerRadius = "6,0,0,6"
+        $edge.HorizontalAlignment = "Left"
+        $row = New-Object System.Windows.Controls.DockPanel
+        $row.Margin = "14,9,14,10"
+        $icon = New-Object System.Windows.Controls.TextBlock
+        $icon.Text = [string]$k.glyph
+        $icon.FontFamily = "Segoe Fluent Icons, Segoe MDL2 Assets"
+        $icon.FontSize = 15
+        $icon.Foreground = Brush $colour
+        $icon.Margin = "0,1,12,0"
+        $icon.VerticalAlignment = "Top"
+        [System.Windows.Controls.DockPanel]::SetDock($icon, "Left")
+        [void]$row.Children.Add($icon)
+        $texts = New-Object System.Windows.Controls.StackPanel
+        if ($d.label) {
+            $label = New-Object System.Windows.Controls.TextBlock
+            $label.Text = ([string]$d.label).ToUpperInvariant()
+            $label.FontSize = 11
+            $label.FontWeight = "SemiBold"
+            $label.Foreground = Brush $colour
+            $label.Margin = "0,0,0,3"
+            [void]$texts.Children.Add($label)
+        }
+        $body = New-Object System.Windows.Controls.TextBlock
+        $body.Text = [string]$d.text
+        $body.TextWrapping = "Wrap"
+        $body.FontSize = 13.5
+        $body.Foreground = Brush "#E4E5EE"
+        [void]$texts.Children.Add($body)
+        [void]$row.Children.Add($texts)
+        $grid = New-Object System.Windows.Controls.Grid
+        [void]$grid.Children.Add($edge)
+        [void]$grid.Children.Add($row)
+        $card.Child = $grid
+        $card
+    }
+}
+
 function Show-Detail($it) {
     $has = [bool]$it
     foreach ($n in "DMeta", "DHeader", "DMetrics", "DLines", "DRowsBox") {
@@ -1105,7 +1200,7 @@ function Show-Detail($it) {
         (Get-InboxControl "M3L").Text = if ($it.needs_ack) { "Waiting for" } else { "Ago" }
         (Get-InboxControl "M3V").Text = if ($mins -lt 1) { "just now" } elseif ($mins -lt 120) { "$mins min" } else { "$([int]($mins / 60)) h" }
     }
-    (Get-InboxControl "DLines").Text = ($it.lines | Where-Object { $_ }) -join "`n"
+    Show-Info $it $colour
     $grid = Get-InboxControl "DRows"
     $grid.Tag = @($it.columns)
     $grid.ItemsSource = $null
@@ -1287,6 +1382,9 @@ function Show-TestPopUp {
         id = $id; alert = "Gjallarhorn test"; group = "Test"; kind = "test"; severity = "warning"
         title = "Gjallarhorn test"; summary = "3 rows"
         lines = @("A sample pop-up shown on this PC only.", "Acknowledging it writes nothing to the share.")
+        details = @([pscustomobject]@{ kind = "about"; label = "About this alert"; text = "A sample pop-up shown on this PC only." },
+            [pscustomobject]@{ kind = "rule"; label = "Fires when"; text = "Someone asks for a test pop-up from the horn's menu." },
+            [pscustomobject]@{ kind = "todo"; label = "What to do"; text = "Acknowledge it: nothing is written to the share." })
         audience = @(); columns = @("sym", "last", "limit"); data = @(, @("AAPL", 231.4, 230.0)) + @(, @("MSFT", 418.2, 415.0)) + @(, @("7203.T", 2875.0, 2850.0))
         total = 3; needs_ack = $true; fired = Get-Date; ackBy = ""; ackAt = $null; isLocal = $true; sound = "horn:warning"
     }
