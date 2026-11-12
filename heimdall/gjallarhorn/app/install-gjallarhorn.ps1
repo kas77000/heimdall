@@ -2,12 +2,15 @@
 Sets Gjallarhorn up for the current Windows user: no admin rights, nothing installed.
 The .cmd files next to it do the same with a double-click:
 
-    install-gjallarhorn.cmd     asks for the shared folder and the desks, then installs
+    install-gjallarhorn.cmd     asks for the shared folder, then installs
     start-gjallarhorn.cmd       starts it now
     stop-gjallarhorn.cmd        quits it now (it starts again at the next logon)
     uninstall-gjallarhorn.cmd   quits it and stops it starting at logon
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File install-gjallarhorn.ps1 -Root "\\server\share\Gjallarhorn" -Desk "Equities"
+    powershell -NoProfile -ExecutionPolicy Bypass -File install-gjallarhorn.ps1 -Root "\\server\share\Gjallarhorn"
+
+Who gets which alerts is set in Bifrost (Settings, Gjallarhorn, Groups), by
+Windows user name: nothing to set on the PC.
 
 It adds a scheduled task that starts Gjallarhorn, hidden, at every logon, and a
 "Gjallarhorn" entry in the Start menu that opens the list of alerts. Both run
@@ -16,9 +19,8 @@ everyone at their next logon.
 
     -Root        the shared folder Heimdall writes the alerts to: the one in
                  Bifrost, Settings, Gjallarhorn (default: the folder above this script's)
-    -Desk        the desks this PC is for, comma separated ("Equities,Rates");
-                 alerts meant for everyone, for this Windows user or for one
-                 of these desks pop up here
+    -Desk        optional, the old way: desks this PC is for, comma separated
+                 ("Equities,Rates"); an alert for one of these names pops up here too
     -Start       start it now (it must be installed)
     -Stop        quit it now; it starts again at the next logon
     -Uninstall   quit it, remove the logon task and the Start menu entry
@@ -126,5 +128,7 @@ Start-Sleep -Seconds 3
 Write-Host ""
 Write-Host "Gjallarhorn is installed for $env:USERNAME$(if ($Desk) { " (desks: $Desk)" }) and starts at every logon."
 Write-Host "Shared folder: $Root"
+Write-Host "Windows user name: $env:USERNAME - in Bifrost (Settings, Gjallarhorn, Groups) it shows up"
+Write-Host "within a few minutes, ready to be put in the groups whose alerts this trader gets."
 Write-Host "A sample pop-up is showing at the bottom right. Its icon sits by the clock;"
 Write-Host "'Gjallarhorn' in the Start menu opens the list of alerts."

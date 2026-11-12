@@ -243,15 +243,96 @@ def _gjallarhorn() -> None:
     with b.container(border=True):
         st.markdown("**2. Send a test pop-up**")
         _test_pop_up()
-    _sounds(g)
     st.markdown("**3. On each trader's PC**, once, as that trader (no admin rights): double-click "
-                "`install-gjallarhorn.cmd` in the folder's `app` subfolder (it asks for the folder and the desks), "
-                "or run:")
+                "`install-gjallarhorn.cmd` in the folder's `app` subfolder (it asks for the folder), or run:")
     st.code(status.get("install", ""), language="bat")
-    st.caption("The second value is the desks that PC is for, comma separated: an alert pops up when it is for "
-               "everyone, for that Windows user name, or for one of those desks. Gjallarhorn then starts at every "
-               "logon. Next to it: `start-gjallarhorn.cmd`, `stop-gjallarhorn.cmd` (until the next logon) and "
-               "`uninstall-gjallarhorn.cmd` (stops it starting at logon).")
+    st.caption("Gjallarhorn then starts at every logon, and the trader's Windows user name shows up below within "
+               "a few minutes. Next to it: `start-gjallarhorn.cmd`, `stop-gjallarhorn.cmd` (until the next logon) "
+               "and `uninstall-gjallarhorn.cmd` (stops it starting at logon).")
+    _groups()
+    _sounds(g)
+
+
+def _alerts_using(alerts: list[dict]) -> dict[str, list[str]]:
+    """Name in an alert's pop-up audience (lower case) -> the alerts using it."""
+    used: dict[str, list[str]] = {}
+    for a in alerts:
+        for who in ((a.get("channels") or {}).get("gjallarhorn") or {}).get("audience", []):
+            used.setdefault(str(who).lower(), []).append(a["name"])
+    return used
+
+
+def _groups() -> None:
+    """Groups of traders, by Windows user name: an alert's pop-ups go to the groups it picks."""
+    import uuid
+    saved = c.call(lambda: c.huginn().get("/gjallarhorn/groups")) or {}
+    seen = c.call(lambda: c.huginn().get("/gjallarhorn/users"), quiet=True) or []
+    used = _alerts_using(c.call(lambda: c.huginn().get("/alerts"), quiet=True) or [])
+    if "gj_groups" not in st.session_state:
+        st.session_state.gj_groups = [{"key": uuid.uuid4().hex[:8], "name": k, "members": list(v)}
+                                      for k, v in saved.items()]
+    draft: list[dict] = st.session_state.gj_groups
+    with st.container(border=True):
+        st.markdown("**Groups of traders**")
+        st.caption("Put traders in groups by Windows user name; an alert's pop-ups go to the groups it picks "
+                   "(Edit → Notify → Traders' pop-ups). A change applies to the next pop-ups, not to those "
+                   "already on screens.")
+        known = {u["user"] for u in seen} | {m for grp in draft for m in grp["members"]}
+        options = sorted(known, key=str.lower)
+        for grp in list(draft):
+            k = grp["key"]
+            a, b, x = st.columns([2, 5, 0.6], vertical_alignment="bottom")
+            grp["name"] = a.text_input("Group", value=grp["name"], key=f"gj_g_name_{k}", placeholder="Equities")
+            grp["members"] = b.multiselect("Traders (Windows user names)", options, default=grp["members"],
+                                           accept_new_options=True, key=f"gj_g_mem_{k}",
+                                           placeholder="Pick or type a user name")
+            if x.button("", icon=":material/delete:", key=f"gj_g_del_{k}", help="Remove this group"):
+                draft.remove(grp)
+                st.rerun()
+            users_of = used.get(grp["name"].strip().lower(), [])
+            if users_of:
+                st.caption(f"Used by {len(users_of)} alert(s): " + ", ".join(sorted(users_of)))
+        a, b, x = st.columns([1, 1, 2])
+        if a.button("Add a group", icon=":material/group_add:", key="gj_g_add"):
+            draft.append({"key": uuid.uuid4().hex[:8], "name": "", "members": []})
+            st.rerun()
+        if x.button("Undo changes", icon=":material/undo:", key="gj_g_undo"):
+            del st.session_state.gj_groups
+            st.rerun()
+        if b.button("Save groups", icon=":material/save:", type="primary", key="gj_g_save"):
+            names = [grp["name"].strip() for grp in draft]
+            dupes = sorted({n for n in names if n and [m.lower() for m in names].count(n.lower()) > 1})
+            if any(not n for n in names):
+                st.error("Every group needs a name.")
+            elif dupes:
+                st.error("Two groups have the same name: " + ", ".join(dupes))
+            else:
+                body = {grp["name"].strip(): grp["members"] for grp in draft}
+                if c.call(lambda: c.huginn().put("/gjallarhorn/groups", body)) is not None:
+                    gone = [n for n in saved if n.lower() not in {m.lower() for m in body} and used.get(n.lower())]
+                    for n in gone:
+                        st.warning(f"Group {n} is gone but still picked by: {', '.join(used[n.lower()])}. "
+                                   "Their pop-ups now reach nobody through it.", icon=":material/warning:")
+                    del st.session_state.gj_groups
+                    st.toast("Groups saved", icon=":material/check:")
+                    if not gone:
+                        st.rerun()
+        _traders(seen)
+
+
+def _traders(seen: list[dict]) -> None:
+    st.markdown("Traders running Gjallarhorn")
+    if not seen:
+        st.caption("None seen yet: Gjallarhorn writes the trader's user name to the folder's `users` subfolder "
+                   "when it starts (after the app is published again with this version), then every few minutes.")
+        return
+    import pandas as pd
+    st.dataframe(pd.DataFrame([{
+        "Status": "🟢 Running" if u["running"] else "⚪ Not seen lately",
+        "User": u["user"], "PC": u["machine"],
+        "Groups": ", ".join(u.get("groups") or []) or "—",
+        "Last seen": pd.to_datetime(u["seen"]).tz_convert(None).strftime("%Y-%m-%d %H:%M") + " UTC",
+    } for u in seen]), hide_index=True, use_container_width=True)
 
 
 TEST_SEVERITIES = {"info": "Info", "warning": "Warning", "critical": "Critical"}
@@ -259,18 +340,20 @@ TEST_SEVERITIES = {"info": "Info", "warning": "Warning", "critical": "Critical"}
 
 def _test_pop_up() -> None:
     """A test pop-up: its severity (and so its sound), and everyone or chosen desks / traders."""
-    known = sorted({who for a in (c.call(lambda: c.huginn().get("/alerts"), quiet=True) or [])
-                    for who in ((a.get("channels") or {}).get("gjallarhorn") or {}).get("audience", [])},
-                   key=str.lower)
+    groups = c.call(lambda: c.huginn().get("/gjallarhorn/groups"), quiet=True) or {}
+    seen = c.call(lambda: c.huginn().get("/gjallarhorn/users"), quiet=True) or []
+    used = {who for a in (c.call(lambda: c.huginn().get("/alerts"), quiet=True) or [])
+            for who in ((a.get("channels") or {}).get("gjallarhorn") or {}).get("audience", [])}
     sev = st.segmented_control("Severity", list(TEST_SEVERITIES), format_func=TEST_SEVERITIES.get,
                                default="warning", key="gj_test_sev") or "warning"
     to = st.radio("Send to", ["everyone", "chosen"], horizontal=True, key="gj_test_scope",
-                  format_func={"everyone": "Every trader", "chosen": "Some desks or traders"}.get)
+                  format_func={"everyone": "Every trader", "chosen": "Some groups or traders"}.get)
     who: list[str] = []
     if to == "chosen":
-        who = st.multiselect("Desks or Windows user names", known, accept_new_options=True, key="gj_test_to",
-                             placeholder="Pick or type a desk or a user name",
-                             help="The desks your alerts use are offered; type any other desk or user name")
+        who = st.multiselect("Groups or Windows user names", c.audience_options(groups, seen, used),
+                             format_func=lambda n: c.audience_label(n, groups), accept_new_options=True,
+                             key="gj_test_to", placeholder="Pick a group or a trader",
+                             help="Your groups (Groups of traders, below) and the traders running Gjallarhorn")
     info = c.call(lambda: c.huginn().get("/gjallarhorn/sounds"), quiet=True) or {}
     sound = (info.get("defaults") or {}).get(sev, f"horn:{sev}")
     if sound.startswith(("horn:", "file:")):

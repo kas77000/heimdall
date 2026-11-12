@@ -385,22 +385,20 @@ writes acknowledgements back.
    Publish again after an upgrade: traders get the new version at their next
    logon, or when they press Restart.
 3. **Send a test pop-up**: pick its severity (you hear its sound), and send it
-   to every trader or to chosen desks or Windows user names (the ones your
-   alerts use are offered; type any other).
+   to every trader or to chosen groups or Windows user names.
 4. **On each trader's PC**, once, as that trader (no admin rights):
    double-click `install-gjallarhorn.cmd` in the folder's `app` subfolder. It
-   asks for the shared folder (the one set in step 1; Enter keeps the folder
-   the `app` folder is in) and the desks that PC is for, comma separated. Or
-   in one line, as Bifrost shows it:
+   asks for the shared folder only (the one set in step 1; Enter keeps the
+   folder the `app` folder is in). Or in one line, as Bifrost shows it:
 
    ```bat
-   "\\fileserver\share\Heimdall\Gjallarhorn\app\install-gjallarhorn.cmd" "\\fileserver\share\Heimdall\Gjallarhorn" "Equities,Rates"
+   "\\fileserver\share\Heimdall\Gjallarhorn\app\install-gjallarhorn.cmd" "\\fileserver\share\Heimdall\Gjallarhorn"
    ```
 
    It checks the folder can be reached, adds a scheduled task that starts
    Gjallarhorn at every logon, and a *Gjallarhorn* entry in the Start menu,
    with its horn icon. A sample pop-up shows when it is done. Run it again to
-   change the folder or the desks. Next to it:
+   change the folder. Next to it:
 
    | File | What it does |
    |---|---|
@@ -411,7 +409,17 @@ writes acknowledgements back.
    There is no other setting on the trader's side: Gjallarhorn reads the
    folder it was installed with. If a test pop-up does not show, open
    `%LOCALAPPDATA%\Gjallarhorn\gjallarhorn.log`: each start says which
-   folder and desks it uses.
+   folder it uses.
+5. **Groups of traders** (Settings → Gjallarhorn): name a group and pick its
+   members by Windows user name. A few minutes after Gjallarhorn starts on a
+   PC, that trader shows up in *Traders running Gjallarhorn* (with the PC, when
+   it was last seen and its groups), ready to be picked; you can also type a
+   user name. Each alert then picks the groups its pop-ups go to. A change of
+   group applies to the next pop-ups, not to those already on screens.
+   Huginn writes a pop-up's groups opened up into user names, so a PC only
+   needs to know who is logged on. (A PC installed with desks the old way,
+   `install-gjallarhorn.cmd "<folder>" "Equities"`, still gets alerts meant
+   for those names.)
 
 **Severity and sound** belong to the alert (Notify, at the top):
 
@@ -434,7 +442,8 @@ themselves from the icon's menu.
 
 **On an alert**, Notify → *Pop up on traders' screens*:
 
-- **For**: desks or Windows user names; empty means every trader.
+- **For**: groups of traders, or single traders (Windows user names); empty
+  means every trader. Below it, Bifrost lists who it reaches.
 - **Also a short pop-up when it clears**: an information pop-up, nothing to
   acknowledge. It does not mail unless *Tell me when it clears* is on.
 

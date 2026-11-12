@@ -110,7 +110,7 @@ Traders do not need Bifrost. Every alert has a **severity** (info, warning,
 critical: shown in Overview and Alerts, and at the start of a firing's email
 subject) and a **sound**, by default a horn call that grows more urgent with the
 severity. An alert with **Pop up on traders' screens** on (for every trader or
-some desks / Windows user names) makes Huginn write one file per firing to a shared folder. Gjallarhorn,
+groups of traders set in Bifrost) makes Huginn write one file per firing to a shared folder. Gjallarhorn,
 running on each trader's PC, shows one card at the bottom right (never a stack:
 "1 of 4" and arrows), keeps every alert waiting to be acknowledged in a list
 with its rows, and writes acknowledgements back to the share; Huginn records

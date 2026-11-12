@@ -699,9 +699,23 @@ def _pop_ups(d: dict, ch: dict) -> None:
     if not g["enabled"]:
         return
     g.pop("severity", None)                       # the alert's own now (Notify, at the top)
-    g["audience"] = st.multiselect("For", sorted(set(g.get("audience", []))), accept_new_options=True,
-                                  key=c.seed(K("gj_to"), list(g.get("audience", []))),
-                                  placeholder="Every trader", help="Desks or Windows user names. Empty: every trader.")
+    groups = c.call(lambda: c.huginn().get("/gjallarhorn/groups"), quiet=True) or {}
+    seen = c.call(lambda: c.huginn().get("/gjallarhorn/users"), quiet=True) or []
+    current = list(g.get("audience", []))
+    g["audience"] = st.multiselect("For", c.audience_options(groups, seen, current), accept_new_options=True,
+                                  format_func=lambda n: c.audience_label(n, groups),
+                                  key=c.seed(K("gj_to"), current), placeholder="Every trader",
+                                  help="The groups of traders set in Settings → Gjallarhorn, or single traders "
+                                       "(Windows user names). Empty: every trader.")
+    if not g["audience"]:
+        st.caption(":material/groups: Every trader running Gjallarhorn gets it.")
+    else:
+        reach = c.audience_reach(g["audience"], groups)
+        empty = [n for n in g["audience"] if n in groups and not groups[n]]
+        st.caption(f":material/groups: Reaches {len(reach)} trader(s): " + ", ".join(reach)
+                   + (f" · group {', '.join(empty)} has nobody in it yet" if empty else ""))
+        if not groups and not seen:
+            st.caption("No group yet: make them in Settings → Gjallarhorn → Groups of traders.")
     g["on_recovery"] = st.toggle("Also a short pop-up when it clears", key=c.seed(K("gj_rec"), bool(g.get("on_recovery", False))))
     st.caption({"info": "Fades after a few seconds.", "warning": "Fades after 25 seconds unless the trader is reading it.",
                 "critical": "Stays on screen until the trader acts on it."}[d.get("severity", "warning")]

@@ -57,7 +57,10 @@ function Write-Log([string]$msg) {
 # -- reading the share ----------------------------------------------------------------
 
 function Test-ForMe($a) {
-    $aud = @($a.audience | Where-Object { $_ })
+    # recipients: the audience with Heimdall's groups opened up into user names.
+    # Files written before groups existed only have the audience.
+    $who = if ($a.PSObject.Properties["recipients"]) { $a.recipients } else { $a.audience }
+    $aud = @($who | Where-Object { $_ })
     if ($aud.Count -eq 0) { return $true }
     foreach ($x in $aud) {
         if ([string]$x -ieq $User) { return $true }
@@ -161,6 +164,26 @@ function Send-Ack($it) {
     $it.ackAt = Get-Date
 }
 
+# Tell Heimdall this trader runs Gjallarhorn: <root>\users\<user>.json, refreshed every
+# few minutes, so Bifrost can offer the user name when building groups.
+$PresenceAt = [DateTime]::MinValue
+function Write-Presence {
+    if (([DateTime]::UtcNow - $script:PresenceAt).TotalMinutes -lt 5) { return }
+    $script:PresenceAt = [DateTime]::UtcNow
+    try {
+        $d = Join-Path $Root "users"
+        [void][IO.Directory]::CreateDirectory($d)
+        $safe = $User -replace "[^A-Za-z0-9._@-]+", "_"
+        $path = Join-Path $d "$safe.json"
+        $tmp = Join-Path $d (".$safe." + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".tmp")
+        $json = [ordered]@{ user = $User; machine = $env:COMPUTERNAME; desks = @($Desks);
+            seen = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss+00:00", $Invariant) } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($tmp, $json, $Utf8)
+        if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+        [IO.File]::Move($tmp, $path)
+    } catch { Write-Log "could not write ${Root}\users: $_" }
+}
+
 # -- what has been seen on this PC --------------------------------------------------------
 
 function Load-State {
@@ -191,6 +214,7 @@ $ShareOk = $true
 function Invoke-Poll {
     # A share blip must not empty the list: no folder, no change.
     if (-not [IO.Directory]::Exists($Root)) { throw "the shared folder $Root is unreachable" }
+    Write-Presence
     $list = Read-Alerts
     $now = Get-Date
     $fresh = New-Object System.Collections.ArrayList

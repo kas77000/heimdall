@@ -486,6 +486,36 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         store.log_event(who, "gjallarhorn test", detail=", ".join(body.audience) or "every trader")
         return data
 
+    @app.get("/gjallarhorn/users", dependencies=secured)
+    def gjallarhorn_users():
+        """Traders whose Gjallarhorn wrote to the share, with the groups they are in."""
+        g = gjallarhorn.Settings.from_store(store.settings())
+        try:
+            seen = gjallarhorn.users(g)
+        except OSError:
+            seen = []
+        member_of: dict[str, list[str]] = {}
+        for name, members in (g.groups or {}).items():
+            for m in members:
+                member_of.setdefault(m.lower(), []).append(name)
+        for u in seen:
+            u["groups"] = member_of.get(u["user"].lower(), [])
+        return seen
+
+    @app.get("/gjallarhorn/groups", dependencies=secured)
+    def gjallarhorn_groups():
+        return gjallarhorn.Settings.from_store(store.settings()).groups or {}
+
+    @app.put("/gjallarhorn/groups", dependencies=secured)
+    def gjallarhorn_put_groups(groups: dict, who: str = Depends(actor)):
+        """Replace the groups of traders (only them: the rest of the Gjallarhorn settings stays)."""
+        clean = gjallarhorn.clean_groups(groups)
+        current = store.settings().get("gjallarhorn") or {}
+        store.set_settings({"gjallarhorn": current | {"groups": clean}})
+        store.log_event(who, "gjallarhorn groups changed",
+                        detail="; ".join(f"{k}: {len(v)}" for k, v in clean.items()) or "no group")
+        return clean
+
     @app.get("/gjallarhorn/sounds", dependencies=secured)
     def gjallarhorn_sounds():
         g = gjallarhorn.Settings.from_store(store.settings())
@@ -568,6 +598,13 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
     @app.put("/settings", dependencies=secured)
     def put_settings(values: dict, who: str = Depends(actor)):
         allowed = {k: v for k, v in values.items() if k in ("smtp", "retention", "gjallarhorn")}
+        if isinstance(allowed.get("gjallarhorn"), dict):
+            g = dict(allowed["gjallarhorn"])
+            current = store.settings().get("gjallarhorn") or {}
+            # Groups change only through /gjallarhorn/groups: a form saving the folder or
+            # the sounds (with what it read earlier) never undoes a change to them.
+            g["groups"] = current.get("groups") or {}
+            allowed["gjallarhorn"] = g
         store.set_settings(allowed)
         store.log_event(who, "settings changed", detail=", ".join(sorted(allowed)))
         return get_settings()

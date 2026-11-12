@@ -9,6 +9,11 @@ Huginn records on the run.
     <root>/acks/<run id>/<user>.json            one per acknowledgement
     <root>/app/                                 the trader app, published from Bifrost
     <root>/sounds/<name>.wav                    sounds uploaded from Bifrost
+    <root>/users/<user>.json                    each trader running Gjallarhorn, refreshed while it runs
+
+Groups of traders are kept in Heimdall (Settings, Gjallarhorn): a pop-up for a
+group lists the group's members in ``recipients``, so a PC only needs to know
+its Windows user name.
 
 Every file is written to a temporary name and renamed, so a reader never sees
 half of one.
@@ -39,6 +44,8 @@ APP_FILES = ("gjallarhorn.ps1", "install-gjallarhorn.ps1", "README.txt",
              "sounds/horn-info.wav", "sounds/horn-warning.wav", "sounds/horn-critical.wav")
 DEFAULT_SOUNDS = {"info": "horn:info", "warning": "horn:warning", "critical": "horn:critical"}
 MAX_SOUND_BYTES = 2 * 1024 * 1024
+USER_FRESH_MINUTES = 15     # the app refreshes its file every 5 minutes while it runs
+USER_KEEP_DAYS = 60         # a trader not seen for this long leaves the list
 _SAFE = re.compile(r"[^A-Za-z0-9._@-]+")
 
 
@@ -47,6 +54,7 @@ class Settings:
     root: str = ""
     keep_days: int = 7
     sounds: Optional[dict] = None             # severity -> sound; Gjallarhorn's horns by default
+    groups: Optional[dict] = None             # group name -> Windows user names
 
     def sound_for(self, severity: str) -> str:
         chosen = (self.sounds or {}).get(severity)
@@ -63,7 +71,67 @@ class Settings:
     def from_store(cls, settings: dict) -> "Settings":
         g = settings.get("gjallarhorn") or {}
         return cls(root=str(g.get("root", "") or "").strip(), keep_days=int(g.get("keep_days", 7) or 7),
-                   sounds={k: v for k, v in (g.get("sounds") or {}).items() if k in SEVERITIES})
+                   sounds={k: v for k, v in (g.get("sounds") or {}).items() if k in SEVERITIES},
+                   groups=clean_groups(g.get("groups")))
+
+
+# -- groups of traders -----------------------------------------------------------------
+
+def clean_groups(raw) -> dict[str, list[str]]:
+    """``{group: [user, ...]}``: names trimmed, no empty group name, each member once
+    (Windows user names compare without case)."""
+    out: dict[str, list[str]] = {}
+    for name, members in (raw or {}).items():
+        name = str(name or "").strip()
+        if not name or name.lower() in {k.lower() for k in out}:
+            continue
+        if isinstance(members, str):
+            members = re.split(r"[,;\s]+", members)
+        seen, keep = set(), []
+        for m in members or []:
+            m = str(m or "").strip()
+            if m and m.lower() not in seen:
+                seen.add(m.lower())
+                keep.append(m)
+        out[name] = keep
+    return out
+
+
+def recipients(settings: Optional[Settings], audience: Iterable[str]) -> list[str]:
+    """Who a pop-up is for, as the trader app matches it: every name of the audience
+    (a user name, or a desk set on a PC) plus the members of the groups among them.
+    Empty: every trader."""
+    groups = {k.lower(): v for k, v in ((settings.groups if settings else None) or {}).items()}
+    out, seen = [], set()
+    for name in audience:
+        name = str(name or "").strip()
+        for who in [name] + groups.get(name.lower(), []):
+            if who and who.lower() not in seen:
+                seen.add(who.lower())
+                out.append(who)
+    return out
+
+
+def users(settings: Settings, now: Optional[datetime] = None) -> list[dict]:
+    """The traders whose Gjallarhorn wrote to the share: user, machine, desks, last seen."""
+    d = Path(settings.root) / "users"
+    if not settings.configured or not d.is_dir():
+        return []
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for f in d.glob("*.json"):
+        if f.name.startswith("."):
+            continue
+        try:
+            u = json.loads(f.read_text(encoding="utf-8-sig"))
+            seen = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
+        except (OSError, ValueError):
+            continue
+        out.append({"user": str(u.get("user") or f.stem), "machine": str(u.get("machine") or ""),
+                    "desks": [str(x) for x in (u.get("desks") or []) if x], "version": str(u.get("version") or ""),
+                    "seen": seen.isoformat(timespec="seconds"),
+                    "running": (now - seen) < timedelta(minutes=USER_FRESH_MINUTES)})
+    return sorted(out, key=lambda u: u["user"].lower())
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -124,7 +192,8 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
         "summary": ("No longer firing" if recovery
                     else f"{n} row{'s' if n != 1 else ''}" if n is not None else "Fired"),
         "lines": lines,
-        "audience": list(g.audience),
+        "audience": list(g.audience),               # as chosen, groups by name
+        "recipients": recipients(settings, g.audience),
         "needs_ack": not recovery,
         "fired_at": at.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "rows": _rows(table),
@@ -154,7 +223,8 @@ def publish_test(settings: Settings, audience: Iterable[str] = (), severity: str
             "severity": severity, "sound": settings.sound_for(severity), "title": "Gjallarhorn test",
             "summary": "3 rows", "lines": ["A test pop-up sent from Bifrost.",
                                            "Acknowledge it to check the way back to Huginn."],
-            "audience": [a for a in audience if a], "needs_ack": True,
+            "audience": [a for a in audience if a], "recipients": recipients(settings, audience),
+            "needs_ack": True,
             "fired_at": now.isoformat(timespec="seconds"), "rows": _rows(rows)}
     publish(settings, data)
     return data
@@ -224,6 +294,13 @@ def clean(settings: Settings, now: Optional[datetime] = None) -> int:
         try:
             if d.is_dir() and d.stat().st_mtime < cutoff.timestamp():
                 shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    for f in (root / "users").glob("*.json"):
+        try:
+            if f.stat().st_mtime < now.timestamp() - USER_KEEP_DAYS * 86400:
+                f.unlink()
                 removed += 1
         except OSError:
             continue
@@ -302,9 +379,10 @@ def sound_bytes(settings: Settings, sound: str) -> Optional[bytes]:
 
 
 def install_command(settings: Settings) -> str:
-    """What a trader runs once: the .cmd on the share, given the folder and the desks."""
+    """What a trader runs once: the .cmd on the share, given the folder. Who gets
+    which alerts is set in Bifrost (groups), not on the PC."""
     root = settings.root.rstrip("\\/") if settings.configured else r"\\server\share\Gjallarhorn"
-    return f'"{root}\\app\\install-gjallarhorn.cmd" "{root}" "Equities"'
+    return f'"{root}\\app\\install-gjallarhorn.cmd" "{root}"'
 
 
 def status(settings: Settings, now: Optional[datetime] = None) -> dict:

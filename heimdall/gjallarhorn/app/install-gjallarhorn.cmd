@@ -3,10 +3,12 @@ setlocal
 rem Install Gjallarhorn for this Windows user: it starts at every logon and pops up
 rem Heimdall's alerts. No admin rights, nothing to install. Double-click it, or:
 rem
-rem   install-gjallarhorn.cmd "\\server\share\Gjallarhorn" "Equities,Rates"
+rem   install-gjallarhorn.cmd "\\server\share\Gjallarhorn"
 rem
-rem The first value is the shared folder Heimdall writes the alerts to (the one in
-rem Bifrost, Settings, Gjallarhorn); the second the desks this PC is for (optional).
+rem The value is the shared folder Heimdall writes the alerts to (the one in
+rem Bifrost, Settings, Gjallarhorn). Who gets which alerts is set in Bifrost
+rem (Settings, Gjallarhorn, Groups), by Windows user name: nothing to set here.
+rem An optional second value names desks this PC is for, the old way ("Equities,Rates").
 
 for %%I in ("%~dp0..") do set "HERE=%%~fI"
 set "ROOT=%~1"
@@ -18,10 +20,6 @@ echo.
 echo The shared folder Heimdall writes the alerts to: the one in Bifrost,
 echo Settings, Gjallarhorn. Press Enter to keep the one in brackets.
 set /p "ROOT=Shared folder [%HERE%]: "
-echo.
-echo The desks this PC is for, comma separated (Equities,Rates). Alerts meant for
-echo everyone, for %USERNAME% or for one of these desks pop up here. Enter for none.
-set /p "DESK=Desks: "
 echo.
 
 :install

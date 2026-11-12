@@ -220,6 +220,47 @@ def test_settings_gjallarhorn(wired, store, tmp_path):
     assert g["sounds"]["info"] == "none" and g["root"] == str(tmp_path / "gj")    # the folder is kept
 
 
+def test_settings_groups_of_traders(wired, store, tmp_path):
+    store.set_settings({"gjallarhorn": {"root": str(tmp_path / "gj")}})
+    at = _page("settings").run()
+    at.segmented_control(key="set_view").set_value("Gjallarhorn").run()
+    assert any("None seen yet" in c.value for c in at.caption)
+    _button(at, "Add a group").click().run()
+    _button(at, "Add a group").click().run()
+    names = [t for t in at.text_input if t.label == "Group"]
+    members = [m for m in at.multiselect if m.label.startswith("Traders")]
+    assert len(names) == 2 and len(members) == 2
+    names[0].set_value("Equities")
+    members[0].set_value(["jdoe", "asmith"])
+    names[1].set_value("Rates").run()
+    _button(at, "Save groups").click().run()
+    assert not at.exception, at.exception
+    assert store.get_setting("gjallarhorn")["groups"] == {"Equities": ["jdoe", "asmith"], "Rates": []}
+    assert store.get_setting("gjallarhorn")["root"] == str(tmp_path / "gj")
+    # the test pop-up offers the groups
+    at.radio(key="gj_test_scope").set_value("chosen").run()
+    assert "Equities" in at.multiselect(key="gj_test_to").options[0] or \
+        any("Group: Equities (2)" in o for o in at.multiselect(key="gj_test_to").options)
+    # two groups with one name are refused
+    next(t for t in at.text_input if t.label == "Group" and t.value == "Rates").set_value("equities")
+    _button(at, "Save groups").click().run()
+    assert any("same name" in e.value for e in at.error)
+
+
+def test_builder_sends_pop_ups_to_a_group(wired, store, tmp_path):
+    store.set_settings({"gjallarhorn": {"root": str(tmp_path / "gj"), "groups": {"Equities": ["jdoe", "asmith"]}}})
+    alert, at = _open_builder(store, "Market-data feed")
+    at.segmented_control[0].set_value("Notify").run()
+    next(t for t in at.toggle if t.label == "Pop up on traders' screens (Gjallarhorn)").set_value(True).run()
+    who = next(m for m in at.multiselect if m.label == "For")
+    assert any("Group: Equities (2)" in o for o in who.options)
+    who.set_value(["Equities", "bwayne"]).run()
+    assert any("Reaches 3 trader(s): jdoe, asmith, bwayne" in c.value for c in at.caption)
+    _button(at, "Save alert").click().run()
+    assert not at.exception, at.exception
+    assert store.alert(alert.id).channels.gjallarhorn.audience == ["Equities", "bwayne"]
+
+
 def test_builder_saves_a_renotify_on_move_rule(wired, store):
     alert, at = _open_builder(store, "Market-data feed")
     at.segmented_control[0].set_value("Trigger").run()

@@ -173,3 +173,32 @@ def coloured(df: pd.DataFrame, column: str):
 
 def height(rows: int, cap: int = 520) -> int:
     return min(38 + 35 * max(rows, 1), cap)
+
+
+# -- who Gjallarhorn's pop-ups go to ------------------------------------------------
+
+def audience_options(groups: dict, seen: list, *extra) -> list[str]:
+    """Groups first, then traders running Gjallarhorn, then any other name in use."""
+    group_names = sorted(groups, key=str.lower)
+    lower = {g.lower() for g in group_names}
+    others = {u["user"] for u in seen} | {m for g in groups.values() for m in g}
+    for more in extra:
+        others |= set(more)
+    return group_names + sorted((o for o in others if o and o.lower() not in lower), key=str.lower)
+
+
+def audience_label(name: str, groups: dict) -> str:
+    members = next((v for k, v in groups.items() if k.lower() == str(name).lower()), None)
+    return f"Group: {name} ({len(members)})" if members is not None else str(name)
+
+
+def audience_reach(names: list, groups: dict) -> list[str]:
+    """The Windows user names a pop-up for these names reaches (what Huginn sends)."""
+    by = {k.lower(): v for k, v in groups.items()}
+    out, low = [], set()
+    for n in names:
+        for who in by.get(str(n).lower(), [n]):
+            if who.lower() not in low:
+                low.add(who.lower())
+                out.append(who)
+    return out

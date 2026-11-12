@@ -132,8 +132,9 @@ subscripts and lambdas are refused at save time.
   `heimdall/gjallarhorn/make_sounds.py`), or a horn, a Windows sound, an
   uploaded .wav, or none. The resolved sound travels in the pop-up's file.
 * **Channels**: email (SMTP, HTML with the rows of the result, in the body or
-  as CSV) and Gjallarhorn pop-ups (for every trader, or some desks / Windows
-  user names). Optionally notify on error after N consecutive errors, and on
+  as CSV) and Gjallarhorn pop-ups (for every trader, or groups of traders kept
+  in Heimdall's settings, or single Windows user names; Huginn opens the
+  groups up into user names in the pop-up's file). Optionally notify on error after N consecutive errors, and on
   recovery (a recovery pop-up is separate from a recovery mail). Every attempt
   is recorded with its outcome.
 * **Interval**: each enabled alert runs every `interval_secs`. An interval of

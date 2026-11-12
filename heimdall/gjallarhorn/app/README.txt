@@ -4,16 +4,17 @@ GJALLARHORN - Heimdall's alerts on a trader's screen
 Nothing to install: Windows PowerShell and WPF are part of Windows.
 
 Set it up on a trader's PC (once, as that trader, no admin rights):
-double-click install-gjallarhorn.cmd in this folder. It asks for
+double-click install-gjallarhorn.cmd in this folder. It asks for the shared
+folder Heimdall writes the alerts to: the one in Bifrost, Settings >
+Gjallarhorn (Enter keeps the folder this app folder is in). Or in one line:
 
-  * the shared folder Heimdall writes the alerts to: the one in Bifrost,
-    Settings > Gjallarhorn (Enter keeps the folder this app folder is in), and
-  * the desks this PC is for, comma separated. An alert pops up when it is
-    meant for everyone, for this Windows user name, or for one of these desks.
+    "\\server\share\Gjallarhorn\app\install-gjallarhorn.cmd" "\\server\share\Gjallarhorn"
 
-Or in one line, without the questions:
-
-    "\\server\share\Gjallarhorn\app\install-gjallarhorn.cmd" "\\server\share\Gjallarhorn" "Equities,Rates"
+Who gets which alerts is set in Bifrost, not here: Settings > Gjallarhorn >
+Groups of traders puts Windows user names in groups, and each alert picks
+the groups (or single traders) its pop-ups go to. A few minutes after
+Gjallarhorn starts, this trader's user name shows up there, ready to be put
+in groups. An alert for nobody in particular reaches every trader.
 
 Gjallarhorn then starts at every logon. The other command files here:
 
@@ -22,7 +23,7 @@ Gjallarhorn then starts at every logon. The other command files here:
     uninstall-gjallarhorn.cmd   quit it and stop it starting at logon
                                 (install-gjallarhorn.cmd puts it back)
 
-Run install-gjallarhorn.cmd again to change the folder or the desks.
+Run install-gjallarhorn.cmd again to change the folder.
 
 What the trader gets:
   * one card at the bottom right, never a stack: it shows the most serious
