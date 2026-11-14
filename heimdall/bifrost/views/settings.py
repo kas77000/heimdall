@@ -6,6 +6,7 @@ import json
 import pandas as pd
 import streamlit as st
 
+from heimdall import gjallarhorn
 from heimdall.bifrost import common as c
 
 OUTPUTS = {"json": "JSON (records, an object or a value)", "csv": "CSV with a header line",
@@ -238,11 +239,15 @@ def _gjallarhorn() -> None:
         a, b = st.columns([3, 1])
         root = a.text_input("Shared folder", value=g.get("root", ""),
                             placeholder=r"\\fileserver\share\Heimdall\Gjallarhorn")
-        keep = b.number_input("Keep alerts (days)", min_value=1, max_value=90, value=int(g.get("keep_days") or 7),
-                              help="Older alert files and acknowledgements are removed from the folder")
+        ttl = b.number_input("Alerts stay for (hours)", min_value=1, max_value=gjallarhorn.MAX_TTL_HOURS,
+                             value=gjallarhorn.Settings.from_store(settings).ttl_hours,
+                             help="A pop-up leaves every trader's list this long after it fired, acknowledged "
+                                  "or not, and Huginn then removes it from the folder. Its acknowledgements "
+                                  "are removed after it, never before. Up to a week.")
         if st.form_submit_button("Save", type="primary", icon=":material/save:"):
-            if c.call(lambda: c.huginn().put("/settings", {"gjallarhorn": g | {"root": root.strip(),
-                                                                              "keep_days": int(keep)}})):
+            keep = {k: v for k, v in g.items() if k != "keep_days"}
+            if c.call(lambda: c.huginn().put("/settings", {"gjallarhorn": keep | {"root": root.strip(),
+                                                                                 "ttl_hours": int(ttl)}})):
                 st.toast("Gjallarhorn settings saved", icon=":material/check:")
                 st.rerun()
     status = c.call(lambda: c.huginn().get("/gjallarhorn"))

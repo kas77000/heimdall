@@ -387,8 +387,12 @@ writes acknowledgements back.
 **Set it up once**, in Bifrost, Settings → Gjallarhorn:
 
 1. **Shared folder**: a folder every trader can read and write, and that the
-   account Huginn runs under can read and write too. **Keep alerts (days)**:
-   older files are removed by Huginn every hour (default 7).
+   account Huginn runs under can read and write too. **Alerts stay for
+   (hours)**: each pop-up leaves every trader's list this long after it fired,
+   acknowledged or not (default 24, at most a week). Each file carries its own
+   `expires_at`; Huginn removes expired ones every hour, and an alert's
+   acknowledgements only after the alert itself (an older `keep_days` setting
+   is read as that many days).
 2. **Publish the app**: copies Gjallarhorn into the folder's `app` subfolder.
    Publish again after an upgrade: traders get the new version at their next
    logon, or when they press Restart.

@@ -255,7 +255,7 @@ class Engine:
         if not g.configured:
             return
         try:
-            found = gjallarhorn.acks(g, since=now - timedelta(days=g.keep_days))
+            found = gjallarhorn.acks(g, since=now - timedelta(hours=g.ttl_hours) - gjallarhorn.ACK_GRACE)
         except Exception:  # noqa: BLE001
             log.warning("gjallarhorn: could not read acknowledgements from %s", g.root)
             return

@@ -73,15 +73,60 @@ def test_publish_writes_by_day_and_leaves_no_temporary_file(tmp_path):
         gjallarhorn.publish(gjallarhorn.Settings(), {"id": "1", "fired_at": "2026-11-11"})
 
 
-def test_clean_removes_old_days_and_acknowledgements(tmp_path):
-    s = gjallarhorn.Settings(root=str(tmp_path), keep_days=2)
-    old = gjallarhorn.publish(s, gjallarhorn.payload(_alert(), _fired(), "trigger", 1, NOW - timedelta(days=5)))
-    new = gjallarhorn.publish(s, gjallarhorn.payload(_alert(), _fired(), "trigger", 2, NOW))
+def _age(path: Path, at: datetime) -> None:
+    for p in [path, *path.rglob("*")]:
+        os.utime(p, (at.timestamp(), at.timestamp()))
+
+
+def test_clean_removes_expired_alerts_then_their_acknowledgements(tmp_path):
+    s = gjallarhorn.Settings(root=str(tmp_path), ttl_hours=48)
+    old = gjallarhorn.publish(s, gjallarhorn.payload(_alert(), _fired(), "trigger", 1, NOW - timedelta(days=5), s))
+    new = gjallarhorn.publish(s, gjallarhorn.payload(_alert(), _fired(), "trigger", 2, NOW, s))
     ack = gjallarhorn.acknowledge(s, "1", "jdoe")
-    stale = (NOW - timedelta(days=5)).timestamp()
-    os.utime(ack.parent, (stale, stale))
+    _age(ack.parent, NOW - timedelta(days=5))
     assert gjallarhorn.clean(s, NOW) == 2
-    assert not old.exists() and new.exists() and not ack.parent.exists()
+    assert not old.exists() and not old.parent.exists() and new.exists() and not ack.parent.exists()
+
+
+def test_an_acknowledgement_is_never_removed_before_its_alert(tmp_path):
+    # The bug traders met: an alert acknowledged 32 hours earlier came back to be
+    # acknowledged again, its acknowledgement cleaned while the alert was still listed.
+    s = gjallarhorn.Settings(root=str(tmp_path), ttl_hours=72)
+    fired = NOW - timedelta(hours=33)
+    alert = gjallarhorn.publish(s, gjallarhorn.payload(_alert(), _fired(), "trigger", 1, fired, s))
+    ack = gjallarhorn.acknowledge(s, "1", "jdoe", now=fired + timedelta(hours=1))
+    _age(ack.parent, NOW - timedelta(hours=32))
+    gjallarhorn.clean(s, NOW)
+    assert alert.exists() and ack.exists()
+    # once the alert's time is over both go
+    gjallarhorn.clean(s, fired + timedelta(hours=73))
+    assert not alert.exists() and not ack.parent.exists()
+    # an acknowledgement written less than a day ago waits, for Huginn to record it
+    late = gjallarhorn.acknowledge(s, "9", "jdoe", now=NOW)
+    gjallarhorn.clean(s, datetime.now(timezone.utc))
+    assert late.exists()
+
+
+def test_clean_follows_each_files_own_expiry_and_old_files_by_their_firing(tmp_path):
+    s = gjallarhorn.Settings(root=str(tmp_path), ttl_hours=24)
+    short = gjallarhorn.payload(_alert(), _fired(), "trigger", 1, NOW - timedelta(hours=3), s)
+    short["expires_at"] = (NOW - timedelta(hours=1)).isoformat()          # written with a shorter time to live
+    legacy = gjallarhorn.payload(_alert(), _fired(), "trigger", 2, NOW - timedelta(hours=25), s)
+    del legacy["expires_at"]                                              # from before expires_at
+    fresh = gjallarhorn.payload(_alert(), _fired(), "trigger", 3, NOW - timedelta(hours=23), s)
+    paths = [gjallarhorn.publish(s, d) for d in (short, legacy, fresh)]
+    assert gjallarhorn.clean(s, NOW) == 2
+    assert [p.exists() for p in paths] == [False, False, True]
+
+
+def test_the_time_to_live_comes_from_the_settings():
+    ttl = lambda g: gjallarhorn.Settings.from_store({"gjallarhorn": g}).ttl_hours  # noqa: E731
+    assert ttl({}) == gjallarhorn.TTL_HOURS == 24
+    assert ttl({"ttl_hours": 6}) == 6 and ttl({"ttl_hours": 9999}) == gjallarhorn.MAX_TTL_HOURS
+    assert ttl({"keep_days": 2}) == 48 and ttl({"keep_days": 30}) == gjallarhorn.MAX_TTL_HOURS   # older settings
+    assert ttl({"ttl_hours": "x"}) == 24
+    data = gjallarhorn.payload(_alert(), _fired(), "trigger", 1, NOW, gjallarhorn.Settings(ttl_hours=6))
+    assert data["expires_at"] == "2026-11-11T15:30:00+00:00"
 
 
 def test_deploy_copies_the_ascii_app():
@@ -170,11 +215,13 @@ def test_the_api_tests_and_publishes(store, engine, share, huginn):
 POWERSHELL = shutil.which("powershell")
 
 
-def _app(share: Path, state: Path, *args: str) -> list[dict]:
+def _app(share: Path, state: Path, *args: str, user: str = "") -> list[dict]:
+    """One run of the app without its window; ``user`` stands for another trader's Windows logon."""
+    env = dict(os.environ, USERNAME=user) if user else None
     out = subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                           str(share / "app" / "gjallarhorn.ps1"), "-DryRun", "-StateDir", str(state), *args],
-                         capture_output=True, text=True, timeout=120)
-    assert out.returncode == 0, out.stderr
+                         capture_output=True, text=True, timeout=120, env=env)
+    assert out.returncode == 0, out.stdout + out.stderr
     return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
 
 

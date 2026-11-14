@@ -25,7 +25,7 @@ param(
     [string]$Root = "",
     [string]$Desk = "",
     [int]$PollSeconds = 5,
-    [int]$LookbackDays = 3,
+    [int]$LookbackDays = 8,          # day folders read: a pop-up lives at most a week (its expires_at)
     [int]$CatchUpMinutes = 60,
     [string]$StateDir = (Join-Path $env:LOCALAPPDATA "Gjallarhorn"),
     [switch]$Open,
@@ -74,8 +74,19 @@ function ConvertTo-Local($v) {
     try { return [DateTimeOffset]::Parse([string]$v, $Invariant).LocalDateTime } catch { return Get-Date }
 }
 
+# When a pop-up leaves the list, acknowledged or not: its expires_at. A file written before
+# there was one keeps the old rule, three days after it fired.
+function Get-Expiry($a, [datetime]$fired) {
+    if ($a.PSObject.Properties["expires_at"] -and $a.expires_at) {
+        if ($a.expires_at -is [datetime]) { return $a.expires_at.ToLocalTime() }
+        try { return [DateTimeOffset]::Parse([string]$a.expires_at, $Invariant).LocalDateTime } catch {}
+    }
+    return $fired.AddDays(3)
+}
+
 function ConvertTo-GjItem($a) {
     $rows = $a.rows
+    $fired = ConvertTo-Local $a.fired_at
     [pscustomobject]@{
         id        = [string]$a.id
         alert     = [string]$a.alert
@@ -93,7 +104,8 @@ function ConvertTo-GjItem($a) {
         total     = $(if ($rows -and $rows.total) { [int]$rows.total } else { 0 })
         needs_ack = [bool]$a.needs_ack
         sound     = $(if ($a.sound) { [string]$a.sound } else { "horn:" + $(if (@("info", "warning", "critical") -contains [string]$a.severity) { [string]$a.severity } else { "warning" }) })
-        fired     = ConvertTo-Local $a.fired_at
+        fired     = $fired
+        expires   = Get-Expiry $a $fired
         ackBy     = ""
         ackAt     = $null
         isLocal   = $false
@@ -194,16 +206,18 @@ function Load-State {
         try {
             $s = [IO.File]::ReadAllText($StateFile, [Text.Encoding]::UTF8) | ConvertFrom-Json
             foreach ($x in @($s.seen)) { if ($x) { [void]$seen.Add([string]$x) } }
-            return @{ seen = $seen; fresh = $false; sound = ($s.sound -ne $false) }
+            $zoom = 1.0
+            if ($s.PSObject.Properties["zoom"]) { try { $zoom = [double]$s.zoom } catch {} }
+            return @{ seen = $seen; fresh = $false; sound = ($s.sound -ne $false); zoom = $zoom }
         } catch { Write-Log "state unreadable, starting fresh: $_" }
     }
-    return @{ seen = $seen; fresh = $true; sound = $true }
+    return @{ seen = $seen; fresh = $true; sound = $true; zoom = 1.0 }
 }
 
 function Save-State {
     $keep = @($Items.Keys)            # only what is still on the share
     $tmp = "$StateFile.tmp"
-    [IO.File]::WriteAllText($tmp, (@{ seen = $keep; sound = [bool]$State.sound } | ConvertTo-Json -Compress), $Utf8)
+    [IO.File]::WriteAllText($tmp, (@{ seen = $keep; sound = [bool]$State.sound; zoom = [double]$State.zoom } | ConvertTo-Json -Compress), $Utf8)
     if ([IO.File]::Exists($StateFile)) { [IO.File]::Delete($StateFile) }
     [IO.File]::Move($tmp, $StateFile)
 }
@@ -222,6 +236,7 @@ function Invoke-Poll {
     $fresh = New-Object System.Collections.ArrayList
     $ids = @{}
     foreach ($it in $list) {
+        if ($it.expires -le $now) { continue }          # its time is over: it leaves the list, even before Huginn cleans it
         $ids[$it.id] = $true
         if ($Items.ContainsKey($it.id)) { continue }
         $Items[$it.id] = $it
@@ -267,7 +282,7 @@ if ($DryRun) {
                 Out-Event @{ event = "popup"; id = $it.id; severity = $it.severity; title = $it.title; summary = $it.summary;
                     rows = $it.data.Count; total = $it.total; sound = $it.sound }
             }
-            $p = Get-Pending
+            $p = @(Get-Pending)
             Out-Event @{ event = "pending"; count = $p.Count; ids = @($p | ForEach-Object { $_.id }) }
         } catch { Out-Event @{ event = "error"; error = "$_" } }
         if ($Once) { break }
@@ -700,6 +715,7 @@ function New-CardWindow {
     $t.Add_Tick({ Hide-Card })
     $script:CardTimer = $t
     $script:Card = $w
+    Set-Zoom $State.zoom -NoSave
 }
 
 # The card fades on its own only when nothing in it is critical: after the longest wait among them.
@@ -873,6 +889,14 @@ $InboxXaml = @"
                     ToolTip="Restart Gjallarhorn (also picks up a new version from the share)"/>
             <Button x:Name="Quit" DockPanel.Dock="Right" Style="{StaticResource Ghost}" Content="Quit"
                     ToolTip="Stop Gjallarhorn: no more alerts until it is started again"/>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="0,0,6,0" VerticalAlignment="Center">
+              <Button x:Name="ZoomOut" Style="{StaticResource Ghost}" Content="&#x2212;" FontSize="15" Padding="9,2"
+                      ToolTip="Smaller (Ctrl and minus, or Ctrl and the mouse wheel)"/>
+              <Button x:Name="ZoomReset" Style="{StaticResource Ghost}" Padding="4,4" MinWidth="46"
+                      ToolTip="Back to 100% (Ctrl and 0)"/>
+              <Button x:Name="ZoomIn" Style="{StaticResource Ghost}" Content="+" FontSize="15" Padding="9,2"
+                      ToolTip="Larger (Ctrl and plus, or Ctrl and the mouse wheel)"/>
+            </StackPanel>
           </DockPanel>
         </Border>
         <ListBox x:Name="List" Background="Transparent" BorderThickness="0" Foreground="#E4E5EE" Margin="12,0,10,6"
@@ -919,7 +943,8 @@ $InboxXaml = @"
                       VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel x:Name="DInfo"/>
         </ScrollViewer>
-        <Border x:Name="DRowsBox" Grid.Row="4" BorderBrush="#2C2E3C" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+        <Border x:Name="DRowsBox" Grid.Row="4" BorderBrush="#2C2E3C" BorderThickness="1" CornerRadius="6" ClipToBounds="True"
+                MinHeight="150">
           <DataGrid x:Name="DRows" AutoGenerateColumns="True" IsReadOnly="True" HeadersVisibility="Column"
                     Background="#111219" RowBackground="#111219" AlternatingRowBackground="#14151E" Foreground="#E4E5EE"
                     BorderThickness="0" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#23252F"
@@ -1183,9 +1208,14 @@ function Show-Detail($it) {
     $pill.Text = if ($it.kind -eq "recovery") { "Cleared" } elseif ($it.kind -eq "test") { "$($s.label) $Dot test" } else { $s.label }
     (Get-InboxControl "DHead").Text = (@($it.group, $it.fired.ToString("ddd dd MMM HH:mm:ss")) | Where-Object { $_ }) -join "  $Dot  "
     (Get-InboxControl "DTitle").Text = $it.title
-    (Get-InboxControl "DState").Text = if ($it.ackBy) {
+    $said = if ($it.ackBy) {
         "Acknowledged by $($it.ackBy) at $($it.ackAt.ToString('HH:mm'))"
     } elseif ($it.needs_ack) { "Waiting for acknowledgement" } else { "Nothing to acknowledge" }
+    if ($it.expires) {
+        $fmt = if ($it.expires.Date -eq (Get-Date).Date) { "HH:mm" } else { "ddd HH:mm" }
+        $said += "  $Dot  leaves the list at $($it.expires.ToString($fmt))"
+    }
+    (Get-InboxControl "DState").Text = $said
     # Three numbers, as Bifrost's overview shows them.
     $shown = $it.data.Count
     (Get-InboxControl "M1L").Text = "Rows"
@@ -1243,9 +1273,70 @@ function Invoke-Ack($it) {
     Update-Tray
 }
 
+# Zoom, as in a browser: the whole list (its table too) and the card grow together, kept on this PC.
+$ZoomSteps = @(0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0)
+$InboxZoom = 1.0          # the zoom the list window's size was made for (1200 x 720 at 100%)
+function Set-Zoom([double]$z, [switch]$NoSave) {
+    $z = [Math]::Min($ZoomSteps[-1], [Math]::Max($ZoomSteps[0], $z))
+    $State.zoom = $z
+    if ($Inbox) {
+        # The window grows with its content, as far as the screen allows: zoomed in a window of the
+        # same size, the cards above would leave the table no room.
+        $wa = [System.Windows.SystemParameters]::WorkArea
+        $f = $z / $script:InboxZoom
+        $script:InboxZoom = $z
+        $Inbox.MinWidth = [Math]::Min(860 * $z, $wa.Width)
+        $Inbox.MinHeight = [Math]::Min(480 * $z, $wa.Height)
+        if ($Inbox.WindowState -eq "Normal") {
+            $Inbox.Width = [Math]::Min($Inbox.Width * $f, $wa.Width)
+            $Inbox.Height = [Math]::Min($Inbox.Height * $f, $wa.Height)
+            if ($Inbox.IsVisible) {
+                $Inbox.Left = [Math]::Max($wa.Left, [Math]::Min($Inbox.Left, $wa.Right - $Inbox.Width))
+                $Inbox.Top = [Math]::Max($wa.Top, [Math]::Min($Inbox.Top, $wa.Bottom - $Inbox.Height))
+            }
+        }
+        (Get-InboxControl "Root").LayoutTransform = New-Object System.Windows.Media.ScaleTransform($z, $z)
+        (Get-InboxControl "ZoomReset").Content = "{0:0}%" -f ($z * 100)
+        (Get-InboxControl "ZoomOut").IsEnabled = $z -gt $ZoomSteps[0]
+        (Get-InboxControl "ZoomIn").IsEnabled = $z -lt $ZoomSteps[-1]
+    }
+    if ($Card) {
+        $Card.Content.LayoutTransform = New-Object System.Windows.Media.ScaleTransform($z, $z)
+        $Card.Width = 416 * $z
+        Set-CardPosition
+    }
+    if (-not $NoSave) { try { Save-State } catch { Write-Log "zoom not saved: $_" } }
+}
+
+function Step-Zoom([int]$step) {
+    $now = [double]$State.zoom
+    $to = if ($step -gt 0) { @($ZoomSteps | Where-Object { $_ -gt $now + 0.001 })[0] } else { @($ZoomSteps | Where-Object { $_ -lt $now - 0.001 })[-1] }
+    if ($to) { Set-Zoom $to }
+}
+
+function Test-Ctrl { ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0 }
+
 function New-Inbox {
     $w = New-Window $InboxXaml
     $script:Inbox = $w
+    (Get-InboxControl "ZoomIn").Add_Click({ Step-Zoom 1 })
+    (Get-InboxControl "ZoomOut").Add_Click({ Step-Zoom -1 })
+    (Get-InboxControl "ZoomReset").Add_Click({ Set-Zoom 1.0 })
+    # Preview: before the table or the list scrolls with the wheel, or the search box takes the key.
+    $w.Add_PreviewMouseWheel({
+            param($x, $e)
+            if (Test-Ctrl) { Step-Zoom $(if ($e.Delta -gt 0) { 1 } else { -1 }); $e.Handled = $true }
+        })
+    $w.Add_PreviewKeyDown({
+            param($x, $e)
+            if (-not (Test-Ctrl)) { return }
+            switch ($e.Key.ToString()) {
+                { @("OemPlus", "Add") -contains $_ } { Step-Zoom 1; $e.Handled = $true }
+                { @("OemMinus", "Subtract") -contains $_ } { Step-Zoom -1; $e.Handled = $true }
+                { @("D0", "NumPad0") -contains $_ } { Set-Zoom 1.0; $e.Handled = $true }
+            }
+        })
+    Set-Zoom $State.zoom -NoSave
     (Get-InboxControl "WinMin").Add_Click({ $Inbox.WindowState = "Minimized" })
     (Get-InboxControl "WinMax").Add_Click({
             $Inbox.WindowState = $(if ($Inbox.WindowState -eq "Maximized") { "Normal" } else { "Maximized" })
@@ -1447,8 +1538,10 @@ function Invoke-UiPoll {
         if ($ShareOk) { Write-Log "poll failed (shared folder unreachable?): $_" }
         $script:ShareOk = $false
     }
-    # Acknowledged elsewhere (another trader, or Heimdall): it leaves the card.
-    foreach ($it in @($Deck)) { if ($it.needs_ack -and $it.ackBy) { Remove-FromDeck $it } }
+    # Acknowledged elsewhere (another trader, or Heimdall), or its time is over: it leaves the card.
+    foreach ($it in @($Deck)) {
+        if (($it.needs_ack -and $it.ackBy) -or -not $Items.ContainsKey($it.id)) { Remove-FromDeck $it }
+    }
     Update-Tray
     if ($Inbox -and $Inbox.IsVisible) { Update-Inbox }
 }

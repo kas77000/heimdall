@@ -40,9 +40,17 @@ What the trader gets:
     places, starts it again from the share, with any new version.
   * a horn call with each pop-up, more urgent with the severity (or the
     alert's own sound); 'Sounds' in the icon's menu turns them off on this PC.
+  * zoom, as in a browser: Ctrl and the mouse wheel, Ctrl and + / - (Ctrl
+    and 0 for 100%), or - 100% + at the bottom of the list. The list, its
+    table and the card grow together; each trader's zoom is kept on their PC.
 
 An acknowledgement is written to the share; Heimdall records who and when, and
 the alert leaves every other trader's card too.
+
+Each alert leaves every trader's list a set time after it fired, acknowledged
+or not (Bifrost, Settings > Gjallarhorn, "Alerts stay for (hours)"; the list
+shows when). Huginn then removes it from the share, and its acknowledgements
+after it, never before.
 
 Its log:    %LOCALAPPDATA%\Gjallarhorn\gjallarhorn.log (each start says which folder it reads)
 

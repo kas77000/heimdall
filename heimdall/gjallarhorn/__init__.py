@@ -46,15 +46,32 @@ DEFAULT_SOUNDS = {"info": "horn:info", "warning": "horn:warning", "critical": "h
 MAX_SOUND_BYTES = 2 * 1024 * 1024
 USER_FRESH_MINUTES = 15     # the app refreshes its file every 5 minutes while it runs
 USER_KEEP_DAYS = 60         # a trader not seen for this long leaves the list
+TTL_HOURS = 24              # how long a pop-up stays in traders' lists, unless the settings say otherwise
+MAX_TTL_HOURS = 168         # the trader app looks back 8 days of folders: a week fits
+ACK_GRACE = timedelta(days=1)   # an acknowledgement outlives its alert by this much, for Huginn to record it
 _SAFE = re.compile(r"[^A-Za-z0-9._@-]+")
+
+
+def _ttl(g: dict) -> int:
+    """``ttl_hours``, or the older ``keep_days`` in hours, within 1 hour .. a week."""
+    raw = g.get("ttl_hours")
+    if not raw and g.get("keep_days"):
+        raw = int(g["keep_days"]) * 24
+    try:
+        return min(MAX_TTL_HOURS, max(1, int(raw or TTL_HOURS)))
+    except (TypeError, ValueError):
+        return TTL_HOURS
 
 
 @dataclass
 class Settings:
     root: str = ""
-    keep_days: int = 7
+    ttl_hours: int = TTL_HOURS                # a pop-up leaves every list this long after it fired
     sounds: Optional[dict] = None             # severity -> sound; Gjallarhorn's horns by default
     groups: Optional[dict] = None             # group name -> Windows user names
+
+    def expires(self, at: datetime) -> str:
+        return (at.astimezone(timezone.utc) + timedelta(hours=self.ttl_hours)).isoformat(timespec="seconds")
 
     def sound_for(self, severity: str) -> str:
         chosen = (self.sounds or {}).get(severity)
@@ -70,7 +87,7 @@ class Settings:
     @classmethod
     def from_store(cls, settings: dict) -> "Settings":
         g = settings.get("gjallarhorn") or {}
-        return cls(root=str(g.get("root", "") or "").strip(), keep_days=int(g.get("keep_days", 7) or 7),
+        return cls(root=str(g.get("root", "") or "").strip(), ttl_hours=_ttl(g),
                    sounds={k: v for k, v in (g.get("sounds") or {}).items() if k in SEVERITIES},
                    groups=clean_groups(g.get("groups")))
 
@@ -208,6 +225,7 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
         "recipients": recipients(settings, g.audience),
         "needs_ack": not recovery,
         "fired_at": at.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        "expires_at": (settings or Settings()).expires(at),     # it leaves every list then, acknowledged or not
         "rows": _rows(table),
     }
 
@@ -243,7 +261,7 @@ def publish_test(settings: Settings, audience: Iterable[str] = (), severity: str
                          "text": "Acknowledge it: Bifrost then shows who did, which checks the way back."}],
             "audience": [a for a in audience if a], "recipients": recipients(settings, audience),
             "needs_ack": True,
-            "fired_at": now.isoformat(timespec="seconds"), "rows": _rows(rows)}
+            "fired_at": now.isoformat(timespec="seconds"), "expires_at": settings.expires(now), "rows": _rows(rows)}
     publish(settings, data)
     return data
 
@@ -293,24 +311,66 @@ def acks(settings: Settings, since: Optional[datetime] = None) -> list[Ack]:
     return out
 
 
+def _parse(v) -> Optional[datetime]:
+    try:
+        t = datetime.fromisoformat(str(v))
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def expiry(data: dict, settings: Settings) -> Optional[datetime]:
+    """When a pop-up leaves the lists: its ``expires_at``, or for a file written before
+    there was one, its firing plus today's time to live."""
+    t = _parse(data.get("expires_at"))
+    if t:
+        return t
+    fired = _parse(data.get("fired_at"))
+    return fired + timedelta(hours=settings.ttl_hours) if fired else None
+
+
 def clean(settings: Settings, now: Optional[datetime] = None) -> int:
-    """Remove day folders and acknowledgements older than ``keep_days``."""
+    """Remove the pop-ups whose time to live is over, then their acknowledgements.
+
+    An acknowledgement goes only once its alert is gone (and a day has passed, for
+    Huginn to record it): removing it first would bring the alert back to every
+    trader as waiting to be acknowledged."""
     if not settings.configured:
         return 0
     now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=max(1, settings.keep_days))
-    root, removed = Path(settings.root), 0
+    root, removed, live = Path(settings.root), 0, set()
     for d in (root / "alerts").glob("????-??-??"):
-        try:
-            day = datetime.strptime(d.name, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
+        if not d.is_dir():
             continue
-        if day + timedelta(days=1) < cutoff:
-            shutil.rmtree(d, ignore_errors=True)
-            removed += 1
+        for f in d.glob("*.json"):
+            if f.name.startswith("."):
+                continue
+            try:
+                data = json.loads(f.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                # unreadable: by its age, so a broken file does not stay for ever
+                try:
+                    data = {"fired_at": datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat()}
+                except OSError:
+                    continue
+            ends = expiry(data, settings)
+            if ends and ends <= now:
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    live.add(str(data.get("id") or f.stem))
+            else:
+                live.add(str(data.get("id") or f.stem))
+        try:
+            if not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+    grace = (now - ACK_GRACE).timestamp()
     for d in (root / "acks").glob("*"):
         try:
-            if d.is_dir() and d.stat().st_mtime < cutoff.timestamp():
+            if d.is_dir() and d.name not in live and d.stat().st_mtime < grace:
                 shutil.rmtree(d, ignore_errors=True)
                 removed += 1
         except OSError:
