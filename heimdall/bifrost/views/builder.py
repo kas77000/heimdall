@@ -341,6 +341,16 @@ def _step_card(d, i, s, conns, scripts) -> None:
                                  placeholder="Optional: what this step is for")
         {"kdb": _kdb, "bloomberg": _bbg, "script": _script, "compute": _compute}[s["kind"]](
             s, uid, earlier, conns, scripts)
+        if s["kind"] in ("kdb", "bloomberg"):
+            per = "each security's row" if s["kind"] == "bloomberg" else "the result of the same query"
+            keep = st.toggle("Keep the result for the day", key=c.seed(K(uid, "keep_day"), s.get("keep_for") == "day"),
+                             help=f"For data that does not change during a day, like daily price limits: "
+                                  f"{per} is fetched once and reused by later checks until the day changes "
+                                  f"(in the active hours' time zone when they are on). "
+                                  + ("Only new securities are asked about; one missing a value is asked again. "
+                                     if s["kind"] == "bloomberg" else "")
+                                  + "A test run always fetches.")
+            s["keep_for"] = "day" if keep else ""
 
 
 def _conn_select(s, uid, conns, kind) -> str:

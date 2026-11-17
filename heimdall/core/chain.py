@@ -60,7 +60,10 @@ def _run_kdb(step: KdbStep, outputs, res: Resources) -> tuple[str, pd.DataFrame]
     return q, res.kdb(step.connection).query(q)
 
 
-def _run_bloomberg(step: BloombergStep, outputs, res: Resources) -> tuple[str, pd.DataFrame]:
+def _run_bloomberg(step: BloombergStep, outputs, res: Resources,
+                   kept: Optional[dict] = None) -> tuple[str, pd.DataFrame]:
+    """``kept``: security -> its row from earlier today (a step kept for the day);
+    only the others are asked about, and complete new rows are added to it."""
     keyed = refs.expand_lines_keyed(step.securities, outputs)
     keys: dict[str, dict] = {}
     for sec, vals in keyed:
@@ -73,11 +76,37 @@ def _run_bloomberg(step: BloombergStep, outputs, res: Resources) -> tuple[str, p
         request += ": " + ", ".join(securities[:8]) + (" …" if len(securities) > 8 else "")
     if not securities:
         # Nothing to ask about (an upstream step returned no rows) is an empty
-        # answer, not an error: "no orders, so no limits to check".
-        return request, pd.DataFrame(columns=["security", *fields])
+        # answer, not an error: "no orders, so no limits to check". It keeps the
+        # columns the securities are built from, so a join on them still works.
+        built = [m.group(2) for m in refs._COLUMN.finditer(step.securities or "") if m.group(2)]
+        return request, pd.DataFrame(columns=["security", *dict.fromkeys(built), *fields])
     if step.operation == "bdp" and not fields:
         raise ValueError("a bdp request needs at least one field")
-    df = res.bloomberg(step.connection).fetch(step.operation, securities, fields, overrides)
+    if kept is None:
+        df = res.bloomberg(step.connection).fetch(step.operation, securities, fields, overrides)
+        return request, _attach_keys(df, keys)
+    ask = [s for s in securities if s not in kept]
+    if ask:
+        fresh = res.bloomberg(step.connection).fetch(step.operation, ask, fields, overrides)
+        if "security" in fresh.columns:
+            for row in fresh.to_dict("records"):
+                # Kept only when complete: a limit not published yet (before the
+                # open) is asked again next time, not remembered as missing.
+                values = [row.get(f) for f in (fields or [c for c in fresh.columns if c != "security"])]
+                if all(v is not None and not (isinstance(v, float) and pd.isna(v)) and v != "" for v in values):
+                    kept[row["security"]] = row
+        else:
+            fresh = pd.DataFrame()
+    else:
+        fresh = pd.DataFrame()
+    reused = [kept[s] for s in securities if s in kept]
+    asked_rows = [r for r in fresh.to_dict("records") if r.get("security") not in kept] if not fresh.empty else []
+    rows = reused + asked_rows
+    order = {s: i for i, s in enumerate(securities)}
+    rows.sort(key=lambda r: order.get(r.get("security"), len(order)))
+    columns = ["security", *fields] if fields else list(dict.fromkeys(k for r in rows for k in r))
+    df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+    request += f" ({len(securities) - len(ask)} kept from earlier today, {len(ask)} asked)"
     return request, _attach_keys(df, keys)
 
 
@@ -131,16 +160,64 @@ _RUNNERS: dict[str, Callable] = {"kdb": _run_kdb, "bloomberg": _run_bloomberg,
                                  "script": _run_script, "compute": _run_compute}
 
 
-def run_steps(alert: Alert, res: Resources, stop_on_error: bool = True) -> list[StepOutcome]:
+class StepCache:
+    """What steps marked ``keep = "day"`` got earlier today, in Huginn's memory.
+
+    Per alert and step, for one day: a Bloomberg step keeps a row per security,
+    any other step its whole table per request. A change to the step (another
+    connection, other fields) starts afresh; so does a restart of Huginn, which
+    simply asks once more."""
+
+    def __init__(self):
+        self._d: dict[tuple, dict] = {}
+        self._lock = threading.Lock()
+
+    def slot(self, alert_key, step, day: str) -> dict:
+        sig = step.model_dump_json(exclude={"note", "securities", "name"}) if isinstance(step, BloombergStep) \
+            else step.model_dump_json(exclude={"note", "name"})
+        with self._lock:
+            k = (alert_key, step.name)
+            s = self._d.get(k)
+            if not s or s["day"] != day or s["sig"] != sig:
+                s = self._d[k] = {"day": day, "sig": sig, "rows": {}, "tables": {}}
+            return s
+
+    def forget(self, alert_key) -> None:
+        with self._lock:
+            for k in [k for k in self._d if k[0] == alert_key]:
+                del self._d[k]
+
+
+KEEPABLE = ("kdb", "bloomberg")      # steps that can keep their result for the day
+
+
+def _run_kept(step, outputs, res: Resources, slot: dict) -> tuple[str, pd.DataFrame]:
+    if isinstance(step, BloombergStep):
+        return _run_bloomberg(step, outputs, res, kept=slot["rows"])
+    # A q query: the same query (its references filled in) gives the same table today.
+    q = refs.fill_q(build_q(step), outputs)
+    if q in slot["tables"]:
+        return q + "  (kept from earlier today)", slot["tables"][q].copy()
+    request, df = _run_kdb(step, outputs, res)
+    slot["tables"][q] = df.copy()
+    return request, df
+
+
+def run_steps(alert: Alert, res: Resources, stop_on_error: bool = True,
+              cache: Optional[StepCache] = None, day: str = "") -> list[StepOutcome]:
     """Every step's outcome. The chain stops at the first failure — later steps
-    would only fail again for want of its table."""
+    would only fail again for want of its table. With a ``cache``, steps marked
+    to keep their result for the day reuse what they got earlier on ``day``."""
     outputs: dict[str, pd.DataFrame] = {}
     results: list[StepOutcome] = []
     for step in alert.steps:
         started = time.monotonic()
         outcome = StepOutcome(step.name, step.kind)
         try:
-            outcome.request, df = _RUNNERS[step.kind](step, outputs, res)
+            if cache is not None and step.keep_for == "day" and day and step.kind in KEEPABLE:
+                outcome.request, df = _run_kept(step, outputs, res, cache.slot(alert.id or alert.name, step, day))
+            else:
+                outcome.request, df = _RUNNERS[step.kind](step, outputs, res)
             if not isinstance(df, pd.DataFrame):
                 df = pd.DataFrame(df)
             outcome.df = df
@@ -221,6 +298,8 @@ def validate(alert: Alert, connections: dict[str, Connection], scripts_by_name: 
             if step.join_step and not step.left_on:
                 problems.append(f"{label}: choose the columns to join on.")
             problems += [f"{label}: {p.split(': ', 1)[-1]}" for p in compute.vet(step)]
+        if step.keep_for == "day" and step.kind not in KEEPABLE:
+            problems.append(f"{label}: only kdb and Bloomberg steps can keep their result for the day.")
         for t in texts:
             for ref in refs.referenced_steps(t):
                 if ref not in seen:

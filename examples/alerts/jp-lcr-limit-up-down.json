@@ -1,0 +1,77 @@
+{
+  "connections": [],
+  "scripts": [],
+  "schedules": [],
+  "alerts": [
+    {
+      "name": "JP LCR orders at limit up/down",
+      "description": "Working Japanese orders with LCR=0.* in their fixmsg whose stock is at its daily limit (B-PIPE MIN_LIMIT / MAX_LIMIT): best bid at the limit up, best ask at the limit down, or the last trade at either. The limits are asked once per stock per day, when a new stock shows up among the orders; bid, ask and last price at every check.",
+      "group": "Japan",
+      "severity": "warning",
+      "enabled": false,
+      "interval_secs": 60,
+      "active_hours": {
+        "enabled": true,
+        "days": [0, 1, 2, 3, 4],
+        "windows": [{"start": "09:00", "end": "15:30"}],
+        "tz": "Asia/Tokyo"
+      },
+      "steps": [
+        {
+          "kind": "kdb",
+          "name": "jp_orders",
+          "note": "Today's activated JP parents whose fixmsg has LCR=0.*; code = 7203 from 7203.JP, lcr = the LCR field",
+          "connection": "OMS RT",
+          "mode": "raw",
+          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,size,algo,fixmsg from target where date=d, sym like \"*.JP\", fixmsg like \"*LCR=0.*\"; ids:exec distinct id_target from t; s:select state:last state, leave:last leave by date,id_server,id_target from target_state where date=d, id_target in ids; r:select from (t lj s) where state=`activated; update code:`$first each \".\" vs/: string sym, lcr:`${first x where x like \"LCR=*\"} each {raze \"^\" vs/: x} each \";\" vs/: string fixmsg from r}[.z.D]"
+        },
+        {
+          "kind": "bloomberg",
+          "name": "limits",
+          "note": "Daily price limits: asked once per stock per day, only for stocks not seen yet today",
+          "connection": "bpipe",
+          "operation": "bdp",
+          "securities": "{{jp_orders.code}} JT Equity",
+          "fields": ["MIN_LIMIT", "MAX_LIMIT"],
+          "keep_for": "day"
+        },
+        {
+          "kind": "bloomberg",
+          "name": "prices",
+          "note": "Live bid, ask and last trade, at every check",
+          "connection": "bpipe",
+          "operation": "snap",
+          "securities": "{{jp_orders.code}} JT Equity",
+          "fields": ["BID", "ASK", "LAST_PRICE"]
+        },
+        {
+          "kind": "compute",
+          "name": "with_limits",
+          "source": "jp_orders",
+          "join_step": "limits",
+          "join_how": "inner",
+          "left_on": ["code"],
+          "right_on": ["code"]
+        },
+        {
+          "kind": "compute",
+          "name": "at_limit",
+          "note": "Up: bid or last at MAX_LIMIT. Down: ask (above 0) or last at MIN_LIMIT",
+          "source": "with_limits",
+          "join_step": "prices",
+          "join_how": "inner",
+          "left_on": ["code"],
+          "right_on": ["code"],
+          "derive": [
+            {"column": "limit", "expr": "'UP' if (BID >= MAX_LIMIT or LAST_PRICE >= MAX_LIMIT) else 'DOWN'"}
+          ],
+          "where": "BID >= MAX_LIMIT or LAST_PRICE >= MAX_LIMIT or (ASK > 0 and ASK <= MIN_LIMIT) or LAST_PRICE <= MIN_LIMIT",
+          "keep": ["sym", "limit", "side", "size", "trader", "algo", "lcr", "MIN_LIMIT", "MAX_LIMIT", "id_target"]
+        }
+      ],
+      "condition": {"type": "has_rows", "step": "at_limit"},
+      "rearm": {"mode": "on_change"},
+      "tags": ["japan", "limit-up-down", "lcr"]
+    }
+  ]
+}

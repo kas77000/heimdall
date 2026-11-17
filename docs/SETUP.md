@@ -196,6 +196,17 @@ run, on Huginn's machine or elsewhere.
 To develop without B-PIPE, use a Bloomberg connection whose host is `demo`: the
 built-in fake Bloomberg.
 
+**Data that does not change during the day**, like a stock's daily price limits
+(`MIN_LIMIT` / `MAX_LIMIT`): switch on **Keep the result for the day** on the
+step. A Bloomberg step then keeps each security's row: at each check only the
+securities it has not seen yet that day are asked about, and one that came back
+without a value (a limit not published before the open) is asked again. A kdb
+step keeps the result of the same query. The day ends at midnight in the
+alert's active-hours time zone when they are on, else Huginn's; a test run in
+Bifrost always fetches, and a restart of Huginn asks once more.
+`examples/alerts/jp-lcr-limit-up-down.json` is an alert built this way (import
+it in Settings → Import / export).
+
 ## 7. Start each part for real
 
 On the server, from the Heimdall folder:

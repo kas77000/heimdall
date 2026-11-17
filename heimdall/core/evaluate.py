@@ -56,9 +56,22 @@ class Evaluation:
         return None if self.judged is None else len(self.judged)
 
 
+def cache_day(alert: Alert, now: datetime) -> str:
+    """The day a kept result belongs to: in the alert's active-hours time zone when
+    they are on (a Tokyo alert's day ends at Tokyo midnight), else Huginn's own."""
+    from heimdall.core import cron
+    if alert.active_hours.enabled:
+        try:
+            return now.astimezone(cron.zone(alert.active_hours.tz)).date().isoformat()
+        except Exception:  # noqa: BLE001 - an unknown zone: Huginn's day
+            pass
+    return now.astimezone().date().isoformat()
+
+
 def evaluate_alert(alert: Alert, res: Resources, state: AlertState, now: datetime,
-                   dry_run: bool = False) -> Evaluation:
-    outcomes = run_steps(alert, res)
+                   dry_run: bool = False, cache=None) -> Evaluation:
+    """``cache``: a StepCache for the steps that keep their result for the day."""
+    outcomes = run_steps(alert, res, cache=cache, day=cache_day(alert, now) if cache is not None else "")
     failed = next((o for o in outcomes if o.error), None)
     if failed is not None or not outcomes:
         error = (f"step '{failed.name}' ({failed.kind}) failed: {failed.error}" if failed

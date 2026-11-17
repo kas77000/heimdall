@@ -120,6 +120,11 @@ class Filter(BaseModel):
 class _StepBase(BaseModel):
     name: str
     note: str = ""
+    # "day": the result is kept until the day changes (the alert's active-hours
+    # time zone when they are on, else Huginn's), for data that does not move
+    # during a day, like a stock's daily price limits. A Bloomberg step keeps
+    # each security's row, so a new security is asked about and the rest are not.
+    keep_for: Literal["", "day"] = ""
 
     @field_validator("name")
     @classmethod

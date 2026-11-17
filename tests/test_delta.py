@@ -65,7 +65,7 @@ def table(monkeypatch):
     """The judged table the next run sees: set ``table["df"]``."""
     box = {"df": pd.DataFrame()}
     monkeypatch.setattr(evaluate, "run_steps",
-                        lambda alert, res: [StepOutcome(name="o", kind="kdb", df=box["df"])])
+                        lambda alert, res, **kw: [StepOutcome(name="o", kind="kdb", df=box["df"])])
     return box
 
 

@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 from heimdall.config import Config
 from heimdall.core import cron, hours
-from heimdall.core.chain import Pool, frame_to_records
+from heimdall.core.chain import Pool, StepCache, frame_to_records
 from heimdall.core.evaluate import AlertState, Evaluation, evaluate_alert
 from heimdall.core.kdb import PyKxClient
 from heimdall.core.models import Alert
@@ -38,6 +38,7 @@ class Engine:
         self.store = store
         self.cfg = cfg
         self.pool = pool or Pool(store.connection, store.script, kdb_factory=PyKxClient)
+        self.step_cache = StepCache()        # results of steps kept for the day
         self.clock = clock
         self._deliver_kw = {"email_fn": email_fn} if email_fn else {}
         self._executor = ThreadPoolExecutor(max_workers=max(1, cfg.workers), thread_name_prefix="huginn")
@@ -189,7 +190,7 @@ class Engine:
         started = self.clock()
         t0 = time.monotonic()
         state = self._state(alert.id)
-        ev = evaluate_alert(alert, self.pool, state, started)
+        ev = evaluate_alert(alert, self.pool, state, started, cache=self.step_cache)
         all_clear, period = self._all_clear(alert, ev, self.store.state(alert.id), started)
         # A firing is an event, not every check that is still true: the run that
         # starts an episode, or one that notified. Only those ask to be acknowledged,

@@ -254,9 +254,9 @@ class FakeBloomberg:
     def _value(self, sec: str, field: str):
         f = field.upper()
         base = self._base(sec)
-        if "LIMIT" in f and ("UP" in f or "HIGH" in f):
+        if "LIMIT" in f and ("UP" in f or "HIGH" in f or "MAX" in f):
             return round(base * 1.10, 2)
-        if "LIMIT" in f and ("DOWN" in f or "LOW" in f):
+        if "LIMIT" in f and ("DOWN" in f or "LOW" in f or "MIN" in f):
             return round(base * 0.90, 2)
         if f in ("NAME", "SECURITY_NAME", "LONG_COMP_NAME"):
             return sec.split()[0].title() + " Corp"
