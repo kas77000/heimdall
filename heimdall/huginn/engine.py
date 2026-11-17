@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from heimdall.config import Config
 from heimdall.core import cron, hours
 from heimdall.core.chain import Pool, StepCache, frame_to_records
-from heimdall.core.evaluate import AlertState, Evaluation, evaluate_alert
+from heimdall.core.evaluate import AlertState, Evaluation, cache_day, evaluate_alert
 from heimdall.core.kdb import PyKxClient
 from heimdall.core.models import Alert
 from heimdall.core.notify import Delivery, SmtpSettings, compose, compose_all_clear, mail_prefix, deliver
@@ -91,13 +91,33 @@ class Engine:
 
     # -- scheduling ------------------------------------------------------------
 
+    @staticmethod
+    def done_today(alert: Alert, state: dict, now: datetime) -> bool:
+        """A once-a-day alert that already notified today: no more checks today."""
+        if not alert.once_a_day:
+            return False
+        notified = parse_iso(state.get("last_notified_at"))
+        return bool(notified) and cache_day(alert, notified) == cache_day(alert, now)
+
+    @staticmethod
+    def _tomorrow(alert: Alert, now: datetime) -> Optional[datetime]:
+        """The first check allowed after today: the next day's start, or its active hours'."""
+        ah = alert.active_hours
+        tz = cron.zone(ah.tz) if ah.enabled else now.astimezone().tzinfo
+        local = now.astimezone(tz)
+        start = datetime.combine(local.date() + timedelta(days=1), datetime.min.time(), tz)
+        return hours.next_open(ah, start) if ah.enabled else start
+
     def due(self, now: datetime) -> list[Alert]:
         states = self.store.states()
         out = []
         for a in self.store.alerts():
             if not a.enabled or a.interval_secs <= 0 or not hours.is_active(a.active_hours, now):
                 continue
-            last = parse_iso((states.get(a.id) or {}).get("last_run_at"))
+            st = states.get(a.id) or {}
+            if self.done_today(a, st, now):
+                continue
+            last = parse_iso(st.get("last_run_at"))
             if last is None or (now - last).total_seconds() >= a.interval_secs:
                 out.append(a)
         return out
@@ -106,6 +126,8 @@ class Engine:
         if not alert.enabled or alert.interval_secs <= 0:
             return None
         now = self.clock()
+        if self.done_today(alert, state, now):
+            return self._tomorrow(alert, now)
         if not hours.is_active(alert.active_hours, now):
             return hours.next_open(alert.active_hours, now)
         last = parse_iso(state.get("last_run_at"))

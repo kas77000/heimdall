@@ -569,6 +569,14 @@ def _trigger(d: dict) -> None:
         pass
 
     st.markdown("#### When it keeps firing")
+    d["once_a_day"] = st.toggle("Fire once a day", key=c.seed(K("once_day"), bool(d.get("once_a_day"))),
+                                help="Once it has notified, Huginn skips its remaining checks until the next day "
+                                     "(midnight in the active hours' time zone when they are on, else Huginn's). "
+                                     "Running it by hand still works.")
+    if d["once_a_day"]:
+        st.caption("At most one notification a day: the first check that fires notifies, and the alert "
+                   "rests until tomorrow.")
+        return
     rearm = d["rearm"]
     a, b = st.columns([2, 1])
     rearm["mode"] = a.radio("Notify", list(REARM), format_func=REARM.get, horizontal=True,

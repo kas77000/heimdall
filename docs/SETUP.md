@@ -207,6 +207,11 @@ Bifrost always fetches, and a restart of Huginn asks once more.
 `examples/alerts/jp-lcr-limit-up-down.json` is an alert built this way (import
 it in Settings → Import / export).
 
+**Fire once a day** (Builder → Trigger → When it keeps firing): once the alert
+has notified, Huginn skips its remaining checks until the next day, so a check
+every hour notifies at most once a day. Overview shows "fired today" and when it
+checks next; running it by hand still works but sends nothing more that day.
+
 ## 7. Start each part for real
 
 On the server, from the Heimdall folder:

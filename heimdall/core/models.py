@@ -408,6 +408,9 @@ class Alert(BaseModel):
     tags: list[str] = Field(default_factory=list)
     enabled: bool = False
     interval_secs: int = 60          # 0 = only when scheduled or run by hand
+    # Once it has notified, no more regular checks until the next day (the
+    # active hours' time zone when they are on): it fires at most once a day.
+    once_a_day: bool = False
     active_hours: ActiveHours = Field(default_factory=ActiveHours)
     steps: list[Step] = Field(default_factory=list)
     condition: Condition = Field(default_factory=Condition)

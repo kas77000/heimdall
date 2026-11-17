@@ -129,7 +129,16 @@ def evaluate_alert(alert: Alert, res: Resources, state: AlertState, now: datetim
     notify = None
     g = alert.channels.gjallarhorn
     wants_recovery = alert.channels.notify_on_recovery or (g.enabled and g.on_recovery)
-    if not dry_run:
+    if alert.once_a_day and met:
+        # Once a day: the first check of the day that fires notifies, whatever
+        # happened yesterday; a second one today (run by hand) does not.
+        notified = state.last_notified_at
+        triggered = not (notified and cache_day(alert, notified) == cache_day(alert, now))
+        escalated = False
+    if not dry_run and alert.once_a_day:
+        if met and triggered:
+            notify = "trigger"
+    elif not dry_run:
         if escalated or conditions.should_notify(state.last_triggered, state.last_notified_at,
                                                  triggered, alert.rearm, now):
             notify = "trigger"

@@ -119,6 +119,7 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
                 "severity_from_result": bool(a.severity_rules),
                 "running": a.id in inflight,
                 "off_hours": a.enabled and not hours.is_active(a.active_hours, now),
+                "done_today": a.enabled and engine.done_today(a, st, now),
                 "active_hours": hours.describe(a.active_hours),
                 "last_run_at": st.get("last_run_at"), "last_status": st.get("last_status"),
                 "last_message": st.get("last_message"), "last_run_id": st.get("last_run_id"),

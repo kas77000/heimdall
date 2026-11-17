@@ -125,7 +125,8 @@ def _alerts_table(alerts: list[dict], key: str) -> None:
         "Sources": " · ".join(c.KIND[k][0] for k in a["kinds"]),
         "Checks": c.every(a["interval_secs"]) if a["enabled"] else "Disabled",
         "Last run": c.ago(a["last_run_at"]),
-        "Next": (("opens " if a.get("off_hours") else "") + c.ago(a["next_due_at"])) if a["next_due_at"] else "",
+        "Next": (("fired today · " if a.get("done_today") else "opens " if a.get("off_hours") else "")
+                 + c.ago(a["next_due_at"])) if a["next_due_at"] else "",
         "Unack.": str(a["unacknowledged"]) if a["unacknowledged"] else "",
         "Condition": a["condition"],
     } for a in rows])
@@ -139,7 +140,10 @@ def _alerts_table(alerts: list[dict], key: str) -> None:
         st.caption("Select a row to run, switch on or off, or edit that alert.")
         return
     a = rows[picked[0]]
-    if a.get("off_hours"):
+    if a.get("done_today"):
+        st.caption(":material/event_available: It fired today and fires once a day: no more checks until "
+                   f"{c.ago(a['next_due_at']) if a['next_due_at'] else 'tomorrow'}; running it by hand still works.")
+    elif a.get("off_hours"):
         st.caption(f":material/bedtime: Outside its active hours ({a.get('active_hours')}). "
                    f"Checks resume {c.ago(a['next_due_at']) if a['next_due_at'] else 'when its hours open'}; "
                    "running it by hand still works.")
