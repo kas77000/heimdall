@@ -107,3 +107,44 @@ def test_only_symbols_new_since_the_last_check_are_asked_for_their_limits():
 def test_no_orders_is_a_quiet_check_not_an_error():
     out = run_steps(_alert(), Res(ORDERS.iloc[0:0]), cache=StepCache(), day="d")
     assert [o.error for o in out] == [None] * 5 and out[-1].df.empty
+
+
+# -- the same alert, for orders of any state --------------------------------------------
+
+ALL = FILE.with_name("jp-lcr-limit-up-down-all-orders.json")
+
+
+def _all() -> Alert:
+    (a,) = json.loads(ALL.read_text(encoding="utf-8"))["alerts"]
+    return Alert.model_validate(a)
+
+
+def test_the_all_orders_alert_is_the_same_but_for_the_state_filter():
+    one, every = _alert(), _all()
+    assert "state=`activated" not in every.steps[0].raw_q and "r:t lj s;" in every.steps[0].raw_q
+    assert every.steps[0].raw_q.replace("r:t lj s;", "r:select from (t lj s) where state=`activated;") \
+        == one.steps[0].raw_q
+    assert "state" in every.steps[-1].keep
+    same = lambda a: a.model_dump(exclude={"name", "description"}, mode="json")  # noqa: E731
+    x, y = same(one), same(every)
+    for d in (x, y):
+        d["steps"][0].pop("raw_q"), d["steps"][0].pop("note"), d["steps"][-1].pop("keep")
+    assert x == y
+    conns = {"OMS RT": Connection(name="OMS RT", kind="kdb", host="h", port=1),
+             "bpipe": Connection(name="bpipe", kind="bloomberg", host="h", port=8194)}
+    assert validate(every, conns, {}) == []
+
+
+def test_the_all_orders_alert_runs_and_shows_each_orders_state():
+    orders = ORDERS.assign(state=["activated", "done", "cancelled"])
+    out = run_steps(_all(), Res(orders), cache=StepCache(), day="d")
+    assert [o.error for o in out] == [None] * 5
+    hit = out[-1].df.sort_values("sym")
+    assert list(hit["sym"]) == ["7203.JP", "9984.JP"] and list(hit["state"]) == ["activated", "done"]
+
+
+def test_both_alerts_import_side_by_side(store, engine, huginn):
+    for f in (FILE, ALL):
+        huginn.post("/import", json.loads(f.read_text(encoding="utf-8")))
+    names = {a.name for a in store.alerts()}
+    assert {"JP LCR orders at limit up/down", "JP LCR orders at limit up/down (all orders)"} <= names
