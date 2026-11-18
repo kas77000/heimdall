@@ -148,3 +148,50 @@ def test_both_alerts_import_side_by_side(store, engine, huginn):
         huginn.post("/import", json.loads(f.read_text(encoding="utf-8")))
     names = {a.name for a in store.alerts()}
     assert {"JP LCR orders at limit up/down", "JP LCR orders at limit up/down (all orders)"} <= names
+
+
+
+# -- every active order, every market, as information ------------------------------------
+
+INFO = FILE.with_name("active-orders-limit-up-down-info.json")
+
+
+def _info() -> Alert:
+    (a,) = json.loads(INFO.read_text(encoding="utf-8"))["alerts"]
+    return Alert.model_validate(a)
+
+
+def test_the_info_alert_covers_every_market_and_every_activated_order():
+    info = _info()
+    assert info.severity == "info" and not info.once_a_day and info.rearm.mode == "rows_change"
+    q = info.steps[0].raw_q
+    assert "*.JP" not in q and "LCR=0." not in q and "state=`activated" in q
+    assert "`TT" in q and "JP Equity" not in q                       # the suffix becomes the market code
+    assert q.count("[") == q.count("]") and q.count("{") == q.count("}") and q.count("(") == q.count(")")
+    assert info.active_hours.tz == "Asia/Hong_Kong"
+    conns = {"OMS RT": Connection(name="OMS RT", kind="kdb", host="h", port=1),
+             "bpipe": Connection(name="bpipe", kind="bloomberg", host="h", port=8194)}
+    assert validate(info, conns, {}) == []
+    # the Bloomberg and compute steps are the JP alert's, reading from "orders"
+    one = _alert().model_dump(mode="json")["steps"][1:]
+    two = info.model_dump(mode="json")["steps"][1:]
+    assert json.dumps(two).replace("orders.", "jp_orders.").replace('"orders"', '"jp_orders"') == json.dumps(one)
+
+
+def test_the_info_alert_finds_limits_in_several_markets():
+    LIMITS.update({"0700": (300.0, 400.0), "2330": (500.0, 600.0), "BHP": (40.0, 50.0)})
+    orders = pd.concat([ORDERS.assign(lcr=[None, "LCR=0.05", None]),
+                        ORDERS.iloc[[2]].assign(sym="0700.HK", bbg="0700 HK Equity", id_target=7),
+                        ORDERS.iloc[[2]].assign(sym="2330.TW", bbg="2330 TT Equity", id_target=8)])
+    out = run_steps(_info(), Res(orders), cache=StepCache(), day="d")
+    assert [o.error for o in out] == [None] * 5
+    assert sorted(out[-1].df["sym"]) == ["7203.JP", "9984.JP"]         # the others trade inside their band
+    assert "2330 TT Equity" in out[1].df["security"].tolist()
+
+
+def test_all_the_limit_alerts_import_side_by_side(store, engine, huginn):
+    for f in (FILE, ALL, INFO):
+        huginn.post("/import", json.loads(f.read_text(encoding="utf-8")))
+    a = store.alert_by_name("Active orders at limit up/down (all markets)")
+    assert a and a.severity == "info" and not a.enabled
+    assert {"JP LCR orders at limit up/down", "JP LCR orders at limit up/down (all orders)"} <= {x.name for x in store.alerts()}
