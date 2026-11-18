@@ -12,6 +12,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from pydantic import ValidationError
 
 from heimdall.bifrost import common as c
@@ -22,6 +23,37 @@ from heimdall.core.models import ALL_CLEAR_INTERVALS, ROW_TRIGGERS, ActiveHours,
 from heimdall.core.notify import ALL_CLEAR_FIELDS, PREVIEW_ROWS
 
 DRAFT, REV, LOADED, PREVIEW = "builder_draft", "builder_rev", "builder_loaded", "builder_preview"
+SCROLL = "builder_scroll_to_results"
+HEAD, RESULTS = "builder_head", "builder_results"
+
+# The title row (New, Test run) stays at the top of the page while it scrolls.
+# A keyed container carries the class st-key-<key>; Streamlit may wrap it, so
+# the wrapper that is a direct child of the page's block is made sticky too.
+# The shadow paints the page colour over the strip above it too, where the
+# (transparent) Streamlit header would otherwise show the page scrolling by.
+STICKY_CSS = """<style>
+div[data-testid="stLayoutWrapper"]:has(> .st-key-{head}), .st-key-{head} {{
+  position: sticky; top: 3.75rem; z-index: 990;
+  background: {bg}; box-shadow: 0 -4rem 0 0 {bg};
+}}
+.st-key-{head} {{ padding: .35rem 0 .6rem; border-bottom: 1px solid {border}; }}
+.st-key-{results} {{ scroll-margin-top: 10.5rem; }}
+</style>"""
+
+# Runs in a zero-height frame of the same origin: scroll the page to the
+# test-run results once they are on it.
+SCROLL_JS = f"""<script>
+(function () {{
+  const doc = window.parent.document;
+  let tries = 0;
+  const go = () => {{
+    const el = doc.querySelector('.st-key-{RESULTS}');
+    if (el) {{ el.scrollIntoView({{behavior: 'smooth', block: 'start'}}); return; }}
+    if (++tries < 40) setTimeout(go, 50);
+  }};
+  go();
+}})();
+</script>"""
 
 BBG_FIELDS = ["PX_LAST", "LAST_PRICE", "BID", "ASK", "VOLUME", "LIMIT_UP", "LIMIT_DOWN",
               "PX_CLOSE_1D", "PX_OPEN", "NAME", "CRNCY", "EQY_SH_OUT", "CUR_MKT_CAP"]
@@ -161,7 +193,11 @@ def render() -> None:
     scripts = c.call(lambda: c.huginn().get("/scripts")) or []
     draft = st.session_state[DRAFT]
 
-    head = st.columns([4, 1, 1], vertical_alignment="bottom")
+    st.markdown(STICKY_CSS.format(head=HEAD, results=RESULTS,
+                                  bg=st.get_option("theme.backgroundColor") or "#111219",
+                                  border=st.get_option("theme.borderColor") or "#2c2e3c"),
+                unsafe_allow_html=True)
+    head = st.container(key=HEAD).columns([4, 1, 1], vertical_alignment="bottom")
     with head[0]:
         c.page_header(("Edit · " + draft["name"]) if draft.get("id") else "New alert",
                       "Steps run in order; each can use what the earlier ones returned.")
@@ -188,7 +224,13 @@ def render() -> None:
 
     if test_clicked:
         _run_preview(draft)
-    _preview_panel(draft)
+        st.session_state[SCROLL] = st.session_state.get(SCROLL + "_n", 0) + 1
+        st.session_state[SCROLL + "_n"] = st.session_state[SCROLL]
+    with st.container(key=RESULTS):
+        _preview_panel(draft)
+    if st.session_state.pop(SCROLL, False) and st.session_state.get(PREVIEW):
+        # the run number makes each click a new frame, so a second click scrolls too
+        components.html(SCROLL_JS + f"<!-- run {st.session_state[SCROLL + '_n']} -->", height=0)
     st.divider()
     _save_bar(draft)
 
