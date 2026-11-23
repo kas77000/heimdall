@@ -489,8 +489,11 @@ writes acknowledgements back.
 
 Settings → Gjallarhorn → **Sounds** sets the default sound of each severity
 and takes your own `.wav` files (up to 2 MB; WAV because it plays on every
-Windows PC without anything installed). Traders can turn sounds off for
-themselves from the icon's menu.
+Windows PC without anything installed). Each trader can switch the alarm off
+or on and set its volume for their own PC, at the bottom of the list
+(**Alarm on/off** and the volume slider) or with **Alarm sound** in the icon's
+menu. Below 100% the horn is played by Windows' media player; on a PC without
+it, it plays at full volume rather than not at all.
 
 **On an alert**, Notify → *Pop up on traders' screens*:
 

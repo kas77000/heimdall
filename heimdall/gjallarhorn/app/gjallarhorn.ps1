@@ -208,16 +208,19 @@ function Load-State {
             foreach ($x in @($s.seen)) { if ($x) { [void]$seen.Add([string]$x) } }
             $zoom = 1.0
             if ($s.PSObject.Properties["zoom"]) { try { $zoom = [double]$s.zoom } catch {} }
-            return @{ seen = $seen; fresh = $false; sound = ($s.sound -ne $false); zoom = $zoom }
+            $volume = 100
+            if ($s.PSObject.Properties["volume"]) { try { $volume = [Math]::Max(0, [Math]::Min(100, [int]$s.volume)) } catch {} }
+            return @{ seen = $seen; fresh = $false; sound = ($s.sound -ne $false); zoom = $zoom; volume = $volume }
         } catch { Write-Log "state unreadable, starting fresh: $_" }
     }
-    return @{ seen = $seen; fresh = $true; sound = $true; zoom = 1.0 }
+    return @{ seen = $seen; fresh = $true; sound = $true; zoom = 1.0; volume = 100 }
 }
 
 function Save-State {
     $keep = @($Items.Keys)            # only what is still on the share
     $tmp = "$StateFile.tmp"
-    [IO.File]::WriteAllText($tmp, (@{ seen = $keep; sound = [bool]$State.sound; zoom = [double]$State.zoom } | ConvertTo-Json -Compress), $Utf8)
+    $s = @{ seen = $keep; sound = [bool]$State.sound; zoom = [double]$State.zoom; volume = [int]$State.volume }
+    [IO.File]::WriteAllText($tmp, ($s | ConvertTo-Json -Compress), $Utf8)
     if ([IO.File]::Exists($StateFile)) { [IO.File]::Delete($StateFile) }
     [IO.File]::Move($tmp, $StateFile)
 }
@@ -463,6 +466,36 @@ $Styles = @'
         </ControlTemplate>
       </Setter.Value>
     </Setter>
+  </Style>
+  <Style x:Key="VolFill" TargetType="RepeatButton">
+    <Setter Property="Focusable" Value="False"/><Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RepeatButton">
+      <Border Background="Transparent"><Border Height="4" CornerRadius="2" Background="#7765EA"/></Border>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="VolRest" TargetType="RepeatButton">
+    <Setter Property="Focusable" Value="False"/><Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RepeatButton">
+      <Border Background="Transparent"><Border Height="4" CornerRadius="2" Background="#2C2E3C"/></Border>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="VolThumb" TargetType="Thumb">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb">
+      <Ellipse Width="13" Height="13" Fill="#E4E5EE"/>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Volume" TargetType="Slider">
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider">
+      <Track x:Name="PART_Track" Height="22">
+        <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource VolFill}" Command="Slider.DecreaseLarge"/></Track.DecreaseRepeatButton>
+        <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource VolRest}" Command="Slider.IncreaseLarge"/></Track.IncreaseRepeatButton>
+        <Track.Thumb><Thumb Style="{StaticResource VolThumb}"/></Track.Thumb>
+      </Track>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.35"/></Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style x:Key="Chrome" TargetType="Button">
     <Setter Property="Foreground" Value="#B4B6C6"/>
@@ -800,8 +833,15 @@ function Get-SoundFile([string]$name) {
     }
 }
 
+$PlayerFile = $null
+
+# The alarm at this PC's volume. At 100% the plain SoundPlayer, as always; below, WPF's
+# MediaPlayer, which has a volume. If MediaPlayer cannot play here (no Windows Media
+# components), the plain player plays it instead, at full volume: better loud than silent.
 function Invoke-Sound([string]$name) {
     if ($NoSound -or -not $State.sound -or -not $name -or $name -eq "none") { return }
+    $vol = [Math]::Max(0, [Math]::Min(100, [int]$State.volume))
+    if ($vol -le 0) { return }
     try {
         if ($name -match '^system:(asterisk|beep|exclamation|hand|question)$') {
             switch ($Matches[1]) {
@@ -815,6 +855,23 @@ function Invoke-Sound([string]$name) {
         }
         $f = Get-SoundFile $name
         if (-not $f) { return }
+        if ($vol -lt 100) {
+            try {
+                if ($Player -is [System.Windows.Media.MediaPlayer]) { $Player.Close() }
+                $m = New-Object System.Windows.Media.MediaPlayer
+                $m.Volume = $vol / 100.0
+                $script:PlayerFile = $f
+                $m.Add_MediaFailed({
+                        param($p, $e)
+                        Write-Log "alarm at a volume failed, played at full volume: $($e.ErrorException.Message)"
+                        try { $script:Player = New-Object System.Media.SoundPlayer $PlayerFile; $Player.Play() } catch {}
+                    })
+                $m.Open((New-Object Uri $f))
+                $m.Play()
+                $script:Player = $m                                      # kept, or it could stop mid-call
+                return
+            } catch { Write-Log "alarm at a volume failed, played at full volume: $_" }
+        }
         $script:Player = New-Object System.Media.SoundPlayer $f       # kept, or it could stop mid-call
         $Player.Play()
     } catch {
@@ -884,6 +941,21 @@ $InboxXaml = @"
           </Grid>
         </StackPanel>
         <Border DockPanel.Dock="Bottom" BorderBrush="#24262F" BorderThickness="0,1,0,0" Padding="14,10">
+          <StackPanel>
+          <DockPanel Margin="0,0,0,8">
+            <Button x:Name="Alarm" DockPanel.Dock="Left" Style="{StaticResource Ghost}" MinWidth="104" HorizontalContentAlignment="Left"
+                    ToolTip="Switch the alarm sound on or off on this PC (pop-ups still come)">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="AlarmIcon" FontFamily="Segoe MDL2 Assets" FontSize="14" VerticalAlignment="Center"/>
+                <TextBlock x:Name="AlarmText" Margin="7,0,0,0" VerticalAlignment="Center"/>
+              </StackPanel>
+            </Button>
+            <TextBlock x:Name="VolumeText" DockPanel.Dock="Right" Width="38" TextAlignment="Right" Foreground="#8B8EA0"
+                       FontSize="12.5" VerticalAlignment="Center"/>
+            <Slider x:Name="Volume" Style="{StaticResource Volume}" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
+                    IsMoveToPointEnabled="True" Margin="8,0,4,0" VerticalAlignment="Center"
+                    ToolTip="Alarm volume on this PC: let go to hear it. Windows' own volume still applies."/>
+          </DockPanel>
           <DockPanel LastChildFill="False">
             <Button x:Name="Restart" DockPanel.Dock="Left" Style="{StaticResource Ghost}" Content="&#x21BB;  Restart"
                     ToolTip="Restart Gjallarhorn (also picks up a new version from the share)"/>
@@ -898,6 +970,7 @@ $InboxXaml = @"
                       ToolTip="Larger (Ctrl and plus, or Ctrl and the mouse wheel)"/>
             </StackPanel>
           </DockPanel>
+          </StackPanel>
         </Border>
         <ListBox x:Name="List" Background="Transparent" BorderThickness="0" Foreground="#E4E5EE" Margin="12,0,10,6"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
@@ -1337,6 +1410,18 @@ function New-Inbox {
             }
         })
     Set-Zoom $State.zoom -NoSave
+    (Get-InboxControl "Alarm").Add_Click({ Set-Alarm (-not $State.sound) })
+    $vol = Get-InboxControl "Volume"
+    $vol.Value = [double]$State.volume                     # before the handlers: loading is not a change
+    $vol.Add_ValueChanged({
+            $State.volume = [int][Math]::Round((Get-InboxControl "Volume").Value)
+            try { Save-State } catch { Write-Log "volume not saved: $_" }
+            Update-Alarm
+        })
+    # Let go of the slider (mouse, or arrow keys): the horn at that volume, to hear it.
+    $vol.Add_PreviewMouseLeftButtonUp({ Invoke-VolumePreview })
+    $vol.Add_KeyUp({ Invoke-VolumePreview })
+    Update-Alarm
     (Get-InboxControl "WinMin").Add_Click({ $Inbox.WindowState = "Minimized" })
     (Get-InboxControl "WinMax").Add_Click({
             $Inbox.WindowState = $(if ($Inbox.WindowState -eq "Maximized") { "Normal" } else { "Maximized" })
@@ -1420,6 +1505,29 @@ function Show-Inbox([string]$id) {
     $Inbox.Topmost = $false
 }
 
+# The alarm sound on this PC: on or off, and how loud. Kept in state.json, as the zoom is.
+function Set-Alarm([bool]$on) {
+    $State.sound = $on
+    try { Save-State } catch { Write-Log "alarm setting not saved: $_" }
+    Update-Alarm
+    Update-Tray
+    if ($on) { Invoke-Sound "horn:info" }
+}
+
+function Invoke-VolumePreview {
+    if ($State.sound) { Invoke-Sound "horn:info" }
+}
+
+function Update-Alarm {
+    if (-not $Inbox) { return }
+    $on = [bool]$State.sound
+    (Get-InboxControl "AlarmIcon").Text = [string][char]$(if ($on) { 0xE767 } else { 0xE74F })
+    (Get-InboxControl "AlarmText").Text = if ($on) { "Alarm on" } else { "Alarm off" }
+    (Get-InboxControl "Alarm").Foreground = Brush $(if ($on) { "#B4B6C6" } else { "#F06470" })
+    (Get-InboxControl "Volume").IsEnabled = $on
+    (Get-InboxControl "VolumeText").Text = "{0}%" -f [int]$State.volume
+}
+
 function Switch-Mute {
     if ((Get-Date) -lt $MutedUntil) { $script:MutedUntil = [datetime]::MinValue }
     else {
@@ -1492,12 +1600,7 @@ $Menu = New-Object System.Windows.Forms.ContextMenuStrip
 [void]$Menu.Items.Add("Open Gjallarhorn", $null, { Show-Inbox "" })
 $MuteItem = $Menu.Items.Add("Pause pop-ups for 1 hour", $null, { Switch-Mute; if ($Inbox -and $Inbox.IsVisible) { Update-Inbox } })
 [void]$Menu.Items.Add("Show a test pop-up", $null, { Show-TestPopUp })
-$SoundItem = $Menu.Items.Add("Sounds", $null, {
-        $State.sound = -not $State.sound
-        Save-State
-        Update-Tray
-        if ($State.sound) { Invoke-Sound "horn:info" }
-    })
+$SoundItem = $Menu.Items.Add("Alarm sound", $null, { Set-Alarm (-not $State.sound) })
 [void]$Menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 [void]$Menu.Items.Add("Restart Gjallarhorn", $null, { Stop-Gjallarhorn -Restart })
 [void]$Menu.Items.Add("Quit Gjallarhorn", $null, { Stop-Gjallarhorn })

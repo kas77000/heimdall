@@ -39,7 +39,11 @@ What the trader gets:
     the list or in the icon's menu (it asks first). Restart, in the same
     places, starts it again from the share, with any new version.
   * a horn call with each pop-up, more urgent with the severity (or the
-    alert's own sound); 'Sounds' in the icon's menu turns them off on this PC.
+    alert's own sound). At the bottom of the list, 'Alarm on / off' turns the
+    sound off or on for this PC (pop-ups still come), and the slider beside it
+    sets its volume: let go of it to hear the horn at that volume. 'Alarm
+    sound' in the icon's menu is the same switch. Windows sounds chosen for an
+    alert follow Windows' volume only. Both settings are kept on this PC.
   * zoom, as in a browser: Ctrl and the mouse wheel, Ctrl and + / - (Ctrl
     and 0 for 100%), or - 100% + at the bottom of the list. The list, its
     table and the card grow together; each trader's zoom is kept on their PC.

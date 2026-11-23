@@ -352,3 +352,19 @@ def test_the_trader_app_knows_each_alerts_sound(share, tmp_path):
     gjallarhorn.publish(s, data)
     sounds = {e["id"]: e["sound"] for e in _app(share, tmp_path / "state", "-Once") if e["event"] == "popup"}
     assert sounds == {"1": "horn:critical", "2": "horn:warning"}
+
+
+@pytest.mark.skipif(not POWERSHELL, reason="Windows PowerShell only")
+def test_the_alarm_setting_and_its_volume_are_kept_on_the_pc(share, tmp_path):
+    gjallarhorn.deploy_app(gjallarhorn.Settings(root=str(share)))
+    state = tmp_path / "state"
+    state.mkdir()
+    sf = state / "state.json"
+    sf.write_text(json.dumps({"seen": [], "sound": True, "zoom": 1.25}), encoding="utf-8")   # before volume existed
+    _app(share, state, "-Once")
+    kept = json.loads(sf.read_text(encoding="utf-8-sig"))
+    assert kept["volume"] == 100 and kept["sound"] is True and kept["zoom"] == 1.25
+    sf.write_text(json.dumps({"seen": [], "sound": False, "zoom": 1.0, "volume": 35}), encoding="utf-8")
+    _app(share, state, "-Once")
+    kept = json.loads(sf.read_text(encoding="utf-8-sig"))
+    assert kept["volume"] == 35 and kept["sound"] is False
