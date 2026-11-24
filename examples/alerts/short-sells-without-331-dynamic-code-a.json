@@ -5,7 +5,7 @@
   "alerts": [
     {
       "name": "Short sells without 331=1 where Bloomberg says A",
-      "description": "Today's short sell orders (side = sellshort), in every market, whose fixmsg does not carry 331=1, and whose stock has DYNAMIC_SHORT_SALE_CODE_RT = A on Bloomberg (B-PIPE). Checked every 5 minutes, 08:00-18:00 Hong Kong time; it notifies when an order joins or leaves the list.",
+      "description": "Today's activated short sell orders (side = sellshort, last state in target_state = activated), in every market, whose fixmsg does not carry 331=1, and whose stock has DYNAMIC_SHORT_SALE_CODE_RT = A on Bloomberg (B-PIPE). Checked every 5 minutes, 08:00-18:00 Hong Kong time; it notifies when an order joins or leaves the list.",
       "group": "Short sell",
       "severity": "warning",
       "enabled": false,
@@ -34,8 +34,8 @@
           "name": "orders",
           "connection": "OMS RT",
           "mode": "raw",
-          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,size,algo from target where date=d, side=`sellshort, not fixmsg like \"*331=1*\"; m:`TW`JP!`TT`JT; update bbg:{[m;s] p:\".\" vs string s; x:`$last p; x:x^m x; `$(first p),\" \",(string x),\" Equity\"}[m] each sym from t}[.z.D]",
-          "note": "Today's sellshort rows in target whose fixmsg has no 331=1; bbg = the Bloomberg ticker from the suffix (7203.JP -> 7203 JT Equity, 2330.TW -> 2330 TT Equity)"
+          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,size,algo from target where date=d, side=`sellshort, not fixmsg like \"*331=1*\"; ids:exec distinct id_target from t; s:select state:last state by date,id_server,id_target from target_state where date=d, id_target in ids; r:select from (t lj s) where state=`activated; m:`TW`JP!`TT`JT; update bbg:{[m;s] p:\".\" vs string s; x:`$last p; x:x^m x; `$(first p),\" \",(string x),\" Equity\"}[m] each sym from r}[.z.D]",
+          "note": "Today's activated sellshort orders whose fixmsg has no 331=1; bbg = the Bloomberg ticker from the suffix (7203.JP -> 7203 JT Equity, 2330.TW -> 2330 TT Equity)"
         },
         {
           "kind": "bloomberg",
@@ -68,6 +68,7 @@
             "size",
             "trader",
             "algo",
+            "state",
             "id_target",
             "DYNAMIC_SHORT_SALE_CODE_RT"
           ],
