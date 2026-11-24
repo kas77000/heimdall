@@ -1,0 +1,90 @@
+{
+  "connections": [],
+  "scripts": [],
+  "schedules": [],
+  "alerts": [
+    {
+      "name": "Short sells without 331=1 where Bloomberg says A",
+      "description": "Today's short sell orders (side = sellshort), in every market, whose fixmsg does not carry 331=1, and whose stock has DYNAMIC_SHORT_SALE_CODE_RT = A on Bloomberg (B-PIPE). Checked every 5 minutes, 08:00-18:00 Hong Kong time; it notifies when an order joins or leaves the list.",
+      "group": "Short sell",
+      "severity": "warning",
+      "enabled": false,
+      "interval_secs": 300,
+      "once_a_day": false,
+      "active_hours": {
+        "enabled": true,
+        "days": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "windows": [
+          {
+            "start": "08:00",
+            "end": "18:00"
+          }
+        ],
+        "tz": "Asia/Hong_Kong"
+      },
+      "steps": [
+        {
+          "kind": "kdb",
+          "name": "orders",
+          "connection": "OMS RT",
+          "mode": "raw",
+          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,size,algo from target where date=d, side=`sellshort, not fixmsg like \"*331=1*\"; m:(enlist `TW)!enlist `TT; update bbg:{[m;s] p:\".\" vs string s; x:`$last p; x:x^m x; `$(first p),\" \",(string x),\" Equity\"}[m] each sym from t}[.z.D]",
+          "note": "Today's sellshort rows in target whose fixmsg has no 331=1; bbg = the Bloomberg ticker from the suffix (7203.JP -> 7203 JP Equity, 2330.TW -> 2330 TT Equity)"
+        },
+        {
+          "kind": "bloomberg",
+          "name": "ssc",
+          "connection": "bpipe",
+          "operation": "bdp",
+          "securities": "{{orders.bbg}}",
+          "fields": [
+            "DYNAMIC_SHORT_SALE_CODE_RT"
+          ],
+          "note": "The dynamic short sale code, asked at every check (it can change during the day)"
+        },
+        {
+          "kind": "compute",
+          "name": "flagged",
+          "source": "orders",
+          "join_step": "ssc",
+          "join_how": "inner",
+          "left_on": [
+            "bbg"
+          ],
+          "right_on": [
+            "bbg"
+          ],
+          "where": "DYNAMIC_SHORT_SALE_CODE_RT == 'A'",
+          "keep": [
+            "sym",
+            "bbg",
+            "side",
+            "size",
+            "trader",
+            "algo",
+            "id_target",
+            "DYNAMIC_SHORT_SALE_CODE_RT"
+          ],
+          "note": "Only the rows whose code is A"
+        }
+      ],
+      "condition": {
+        "type": "has_rows",
+        "step": "flagged"
+      },
+      "rearm": {
+        "mode": "rows_change"
+      },
+      "tags": [
+        "short-sell",
+        "331"
+      ]
+    }
+  ]
+}
