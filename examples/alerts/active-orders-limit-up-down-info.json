@@ -66,6 +66,7 @@
         {
           "kind": "compute",
           "name": "with_limits",
+          "note": "Only stocks B-PIPE gives both daily limits for: no MIN_LIMIT or MAX_LIMIT (a market with no limits, or nothing returned) and the line goes",
           "source": "orders",
           "join_step": "limits",
           "join_how": "inner",
@@ -74,7 +75,8 @@
           ],
           "right_on": [
             "bbg"
-          ]
+          ],
+          "where": "notnull(MIN_LIMIT) and notnull(MAX_LIMIT) and MIN_LIMIT > 0 and MAX_LIMIT > 0"
         },
         {
           "kind": "compute",

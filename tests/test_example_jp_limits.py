@@ -224,3 +224,19 @@ def test_the_info_alert_keeps_only_orders_marketable_at_the_limit():
     assert list(df["id_target"]) == [1, 4, 5, 7, 8, 9]
     assert list(df["limit_px"]) == [3500.0, 3500.0, 8000.0, 8000.0, 8000.0, 8000.0]
     assert {"otype", "limit_price", "limit_px"} <= set(df.columns)
+
+
+def test_stocks_without_both_limits_are_dropped_before_the_prices_are_judged(monkeypatch):
+    nan = float("nan")
+    monkeypatch.setitem(LIMITS, "0005", (nan, nan))         # no daily limits, e.g. Hong Kong
+    monkeypatch.setitem(LIMITS, "0006", (nan, 600.0))       # only one of the two
+    monkeypatch.setitem(LIMITS, "0007", (0.0, 0.0))         # zeros are no limits either
+    extra = [ORDERS.iloc[[0]].assign(sym=f"000{i}.HK", bbg=f"000{i} HK Equity", id_target=10 + i,
+                                     sidesign=1, otype="market", limit_price=0.0) for i in (5, 6, 7)]
+    orders = pd.concat([ORDERS.assign(sidesign=[1, -1, 1], otype="market", limit_price=0.0), *extra])
+    for alert in (_alert(), _info()):
+        out = run_steps(alert, Res(orders), cache=StepCache(), day="d")
+        assert [o.error for o in out] == [None] * 5
+        with_limits = out[3].df
+        assert not with_limits["sym"].str.endswith(".HK").any()
+        assert with_limits["MIN_LIMIT"].notna().all() and with_limits["MAX_LIMIT"].notna().all()

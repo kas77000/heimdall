@@ -13,8 +13,19 @@
       "once_a_day": true,
       "active_hours": {
         "enabled": true,
-        "days": [0, 1, 2, 3, 4],
-        "windows": [{"start": "09:00", "end": "15:30"}],
+        "days": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "windows": [
+          {
+            "start": "09:00",
+            "end": "15:30"
+          }
+        ],
         "tz": "Asia/Tokyo"
       },
       "steps": [
@@ -33,7 +44,10 @@
           "connection": "bpipe",
           "operation": "bdp",
           "securities": "{{jp_orders.bbg}}",
-          "fields": ["MIN_LIMIT", "MAX_LIMIT"],
+          "fields": [
+            "MIN_LIMIT",
+            "MAX_LIMIT"
+          ],
           "keep_for": "day"
         },
         {
@@ -43,16 +57,26 @@
           "connection": "bpipe",
           "operation": "snap",
           "securities": "{{jp_orders.bbg}}",
-          "fields": ["BID", "ASK", "LAST_PRICE"]
+          "fields": [
+            "BID",
+            "ASK",
+            "LAST_PRICE"
+          ]
         },
         {
           "kind": "compute",
           "name": "with_limits",
+          "note": "Only stocks B-PIPE gives both daily limits for: no MIN_LIMIT or MAX_LIMIT (a market with no limits, or nothing returned) and the line goes",
           "source": "jp_orders",
           "join_step": "limits",
           "join_how": "inner",
-          "left_on": ["bbg"],
-          "right_on": ["bbg"]
+          "left_on": [
+            "bbg"
+          ],
+          "right_on": [
+            "bbg"
+          ],
+          "where": "notnull(MIN_LIMIT) and notnull(MAX_LIMIT) and MIN_LIMIT > 0 and MAX_LIMIT > 0"
         },
         {
           "kind": "compute",
@@ -61,17 +85,42 @@
           "source": "with_limits",
           "join_step": "prices",
           "join_how": "inner",
-          "left_on": ["bbg"],
-          "right_on": ["bbg"],
+          "left_on": [
+            "bbg"
+          ],
+          "right_on": [
+            "bbg"
+          ],
           "derive": [
-            {"column": "limit", "expr": "'UP' if (BID >= MAX_LIMIT or LAST_PRICE >= MAX_LIMIT) else 'DOWN'"}
+            {
+              "column": "limit",
+              "expr": "'UP' if (BID >= MAX_LIMIT or LAST_PRICE >= MAX_LIMIT) else 'DOWN'"
+            }
           ],
           "where": "BID >= MAX_LIMIT or LAST_PRICE >= MAX_LIMIT or (ASK > 0 and ASK <= MIN_LIMIT) or LAST_PRICE <= MIN_LIMIT",
-          "keep": ["sym", "limit", "side", "size", "trader", "algo", "lcr", "MIN_LIMIT", "MAX_LIMIT", "id_target"]
+          "keep": [
+            "sym",
+            "limit",
+            "side",
+            "size",
+            "trader",
+            "algo",
+            "lcr",
+            "MIN_LIMIT",
+            "MAX_LIMIT",
+            "id_target"
+          ]
         }
       ],
-      "condition": {"type": "has_rows", "step": "at_limit"},
-      "tags": ["japan", "limit-up-down", "lcr"]
+      "condition": {
+        "type": "has_rows",
+        "step": "at_limit"
+      },
+      "tags": [
+        "japan",
+        "limit-up-down",
+        "lcr"
+      ]
     }
   ]
 }
