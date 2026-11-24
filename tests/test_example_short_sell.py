@@ -10,10 +10,10 @@ from heimdall.core.models import Alert, Connection
 FILE = Path(__file__).parents[1] / "examples" / "alerts" / "short-sells-without-331-dynamic-code-a.json"
 # What OMS RT gives back once the q has filtered (sellshort, no 331=1) and built bbg.
 ORDERS = pd.DataFrame({"sym": ["7203.JP", "0700.HK", "2330.TW", "6758.JP"],
-                       "bbg": ["7203 JP Equity", "0700 HK Equity", "2330 TT Equity", "6758 JP Equity"],
+                       "bbg": ["7203 JT Equity", "0700 HK Equity", "2330 TT Equity", "6758 JT Equity"],
                        "side": ["sellshort"] * 4, "size": [1000, 500, 300, 200], "trader": ["jdoe"] * 4,
                        "algo": ["VWAP"] * 4, "id_target": [1, 2, 3, 4]})
-CODES = {"7203 JP Equity": "A", "0700 HK Equity": "N", "2330 TT Equity": "A", "6758 JP Equity": None}
+CODES = {"7203 JT Equity": "A", "0700 HK Equity": "N", "2330 TT Equity": "A", "6758 JT Equity": None}
 
 
 class Bpipe:
@@ -55,7 +55,7 @@ def test_the_file_is_a_valid_alert_for_the_work_connections():
     assert validate(a, conns, {}) == []
     q = a.steps[0].raw_q
     assert q.count("[") == q.count("]") and q.count("{") == q.count("}") and q.count("(") == q.count(")")
-    assert "side=`sellshort" in q and 'not fixmsg like "*331=1*"' in q and "`TT" in q
+    assert "side=`sellshort" in q and 'not fixmsg like "*331=1*"' in q and "m:`TW`JP!`TT`JT;" in q
     assert a.steps[1].fields == ["DYNAMIC_SHORT_SALE_CODE_RT"] and a.steps[1].keep_for == ""
 
 
