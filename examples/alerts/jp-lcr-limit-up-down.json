@@ -21,10 +21,10 @@
         {
           "kind": "kdb",
           "name": "jp_orders",
-          "note": "Today's activated JP parents whose fixmsg has LCR=0.*; bbg = the Bloomberg ticker, 7203.JP -> 7203 JP Equity; lcr = the LCR field",
+          "note": "Today's activated JP parents whose fixmsg has LCR=0.*; bbg = the Bloomberg ticker, 7203.JP -> 7203 JT Equity; lcr = the LCR field",
           "connection": "OMS RT",
           "mode": "raw",
-          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,size,algo,fixmsg from target where date=d, sym like \"*.JP\", fixmsg like \"*LCR=0.*\"; ids:exec distinct id_target from t; s:select state:last state, leave:last leave by date,id_server,id_target from target_state where date=d, id_target in ids; r:select from (t lj s) where state=`activated; update bbg:`$(first each \".\" vs/: string sym),\\:\" JP Equity\", lcr:`${first x where x like \"LCR=*\"} each {raze \"^\" vs/: x} each \";\" vs/: string fixmsg from r}[.z.D]"
+          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,size,algo,fixmsg from target where date=d, sym like \"*.JP\", fixmsg like \"*LCR=0.*\"; ids:exec distinct id_target from t; s:select state:last state, leave:last leave by date,id_server,id_target from target_state where date=d, id_target in ids; r:select from (t lj s) where state=`activated; update bbg:`$(first each \".\" vs/: string sym),\\:\" JT Equity\", lcr:`${first x where x like \"LCR=*\"} each {raze \"^\" vs/: x} each \";\" vs/: string fixmsg from r}[.z.D]"
         },
         {
           "kind": "bloomberg",

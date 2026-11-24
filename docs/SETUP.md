@@ -318,7 +318,7 @@ In **Builder**:
    later steps refer to earlier results with `{{name.column}}`.
    - *KDB*: pick the connection and table; add columns and *Where* conditions,
      or switch to *Raw q*. The q that will run is shown underneath.
-   - *Bloomberg*: one security per line, e.g. `{{orders.sym}} JP Equity`
+   - *Bloomberg*: one security per line, e.g. `{{orders.sym}} JT Equity`
      (repeated for each value, and the result keeps `sym` beside `security` so
      you can join back), plus fields such as `LIMIT_UP`, `LIMIT_DOWN`,
      `PX_LAST`. `bdp` asks for reference and current values; `snap` subscribes

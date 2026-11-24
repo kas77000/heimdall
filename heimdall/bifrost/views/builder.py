@@ -478,7 +478,7 @@ def _bbg(s, uid, earlier, conns, scripts) -> None:
     _ref_hint(earlier)
     s["securities"] = st.text_area(
         "Securities, one per line", height=90, key=c.seed(K(uid, "secs"), s.get("securities", "")),
-        placeholder="{{orders.sym}} JP Equity\nNKY Index",
+        placeholder="{{orders.sym}} JT Equity\nNKY Index",
         help="A line with {{step.column}} is repeated for each value, and the result keeps that "
              "column next to `security` so you can join back on it.")
     fields = st.multiselect("Fields", sorted(set(BBG_FIELDS) | set(s.get("fields", []))),

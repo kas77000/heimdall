@@ -8,7 +8,7 @@ from heimdall.core.chain import StepCache, run_steps, validate
 from heimdall.core.models import Alert, Connection
 
 FILE = Path(__file__).parents[1] / "examples" / "alerts" / "jp-lcr-limit-up-down.json"
-ORDERS = pd.DataFrame({"sym": ["7203.JP", "9984.JP", "6758.JP"], "bbg": ["7203 JP Equity", "9984 JP Equity", "6758 JP Equity"],
+ORDERS = pd.DataFrame({"sym": ["7203.JP", "9984.JP", "6758.JP"], "bbg": ["7203 JT Equity", "9984 JT Equity", "6758 JT Equity"],
                        "side": ["buy", "sell", "buy"], "size": [1000, 500, 300], "trader": ["jdoe"] * 3,
                        "algo": ["VWAP"] * 3, "lcr": ["LCR=0.05"] * 3, "leave": [800.0, 500.0, 300.0],
                        "id_target": [1, 2, 3]})
@@ -62,6 +62,7 @@ def test_the_file_is_a_valid_alert_for_the_work_connections():
     q = _alert().steps[0].raw_q
     assert q.count("[") == q.count("]") and q.count("{") == q.count("}") and q.count("(") == q.count(")")
     assert 'fixmsg like "*LCR=0.*"' in q and "state=`activated" in q
+    assert '" JT Equity"' in q and "JP Equity" not in q               # Bloomberg's code for Tokyo is JT
 
 
 def test_it_finds_the_stocks_at_their_limits_and_asks_limits_once():
@@ -73,10 +74,10 @@ def test_it_finds_the_stocks_at_their_limits_and_asks_limits_once():
     assert "BID" not in hit.columns and "leave" not in hit.columns     # nothing that moves every tick
     run_steps(_alert(), res, cache=cache, day="2026-11-17")
     assert [op for op, _ in res.bbg.asked] == ["bdp", "snap", "snap"]  # limits once, prices each time
-    res.orders = pd.concat([ORDERS, ORDERS.iloc[[2]].assign(sym="6501.JP", bbg="6501 JP Equity", id_target=4)])
+    res.orders = pd.concat([ORDERS, ORDERS.iloc[[2]].assign(sym="6501.JP", bbg="6501 JT Equity", id_target=4)])
     LIMITS["6501"] = (1000.0, 2000.0)
     run_steps(_alert(), res, cache=cache, day="2026-11-17")
-    assert res.bbg.asked[3] == ("bdp", ["6501 JP Equity"])              # a new stock: only its limits
+    assert res.bbg.asked[3] == ("bdp", ["6501 JT Equity"])              # a new stock: only its limits
 
 
 def test_it_imports_switched_off_with_its_cache_setting(store, engine, huginn):
@@ -92,14 +93,14 @@ def test_only_symbols_new_since_the_last_check_are_asked_for_their_limits():
     # and its limits are kept beside 7203's.
     LIMITS["6970"] = (1500.0, 2500.0)
     one = ORDERS.iloc[[0]]
-    two = pd.concat([one, one.assign(sym="6970.JP", bbg="6970 JP Equity", id_target=9)])
+    two = pd.concat([one, one.assign(sym="6970.JP", bbg="6970 JT Equity", id_target=9)])
     res, cache = Res(one), StepCache()
     run_steps(_alert(), res, cache=cache, day="d")
     res.orders = two
     out = run_steps(_alert(), res, cache=cache, day="d")
     limits_asked = [secs for op, secs in res.bbg.asked if op == "bdp"]
-    assert limits_asked == [["7203 JP Equity"], ["6970 JP Equity"]]
-    assert sorted(out[1].df["security"]) == ["6970 JP Equity", "7203 JP Equity"]
+    assert limits_asked == [["7203 JT Equity"], ["6970 JT Equity"]]
+    assert sorted(out[1].df["security"]) == ["6970 JT Equity", "7203 JT Equity"]
     run_steps(_alert(), res, cache=cache, day="d")                     # nothing new: nothing asked
     assert len([1 for op, _ in res.bbg.asked if op == "bdp"]) == 2
 
@@ -166,7 +167,7 @@ def test_the_info_alert_covers_every_market_and_every_activated_order():
     assert info.severity == "info" and not info.once_a_day and info.rearm.mode == "rows_change"
     q = info.steps[0].raw_q
     assert "*.JP" not in q and "LCR=0." not in q and "state=`activated" in q
-    assert "`TT" in q and "JP Equity" not in q                       # the suffix becomes the market code
+    assert "m:`TW`JP!`TT`JT;" in q and "JT Equity" not in q        # the suffix becomes the market code: JP -> JT, TW -> TT
     assert q.count("[") == q.count("]") and q.count("{") == q.count("}") and q.count("(") == q.count(")")
     assert info.active_hours.tz == "Asia/Hong_Kong"
     conns = {"OMS RT": Connection(name="OMS RT", kind="kdb", host="h", port=1),
@@ -202,7 +203,7 @@ def test_the_info_alert_keeps_only_orders_marketable_at_the_limit():
     """7203 is stuck at its limit up (3500), 9984 at its limit down (8000)."""
     def o(i, sym, sidesign, otype, px):
         code = sym.split(".")[0]
-        return {"sym": sym, "bbg": f"{code} JP Equity", "side": "buy" if sidesign > 0 else "sell",
+        return {"sym": sym, "bbg": f"{code} JT Equity", "side": "buy" if sidesign > 0 else "sell",
                 "sidesign": sidesign, "otype": otype, "limit_price": px, "size": 100, "trader": "jdoe",
                 "algo": "VWAP", "lcr": None, "id_target": i}
     orders = pd.DataFrame([

@@ -32,10 +32,10 @@
         {
           "kind": "kdb",
           "name": "orders",
-          "note": "Today's activated parents in every market, whatever their fixmsg, with sidesign (+1 buy, -1 sell), otype and limit_price for the marketable test; bbg = the Bloomberg ticker from the suffix (7203.JP -> 7203 JP Equity, 2330.TW -> 2330 TT Equity); lcr = the LCR field, if any",
+          "note": "Today's activated parents in every market, whatever their fixmsg, with sidesign (+1 buy, -1 sell), otype and limit_price for the marketable test; bbg = the Bloomberg ticker from the suffix (7203.JP -> 7203 JT Equity, 2330.TW -> 2330 TT Equity); lcr = the LCR field, if any",
           "connection": "OMS RT",
           "mode": "raw",
-          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,sidesign,otype,limit_price,size,algo,fixmsg from target where date=d; ids:exec distinct id_target from t; s:select state:last state, leave:last leave by date,id_server,id_target from target_state where date=d, id_target in ids; r:select from (t lj s) where state=`activated; m:(enlist `TW)!enlist `TT; update bbg:{[m;s] p:\".\" vs string s; x:`$last p; x:x^m x; `$(first p),\" \",(string x),\" Equity\"}[m] each sym, lcr:`${first x where x like \"LCR=*\"} each {raze \"^\" vs/: x} each \";\" vs/: string fixmsg from r}[.z.D]"
+          "raw_q": "{[d] t:select date,id_server,id_target,sym,trader,side,sidesign,otype,limit_price,size,algo,fixmsg from target where date=d; ids:exec distinct id_target from t; s:select state:last state, leave:last leave by date,id_server,id_target from target_state where date=d, id_target in ids; r:select from (t lj s) where state=`activated; m:`TW`JP!`TT`JT; update bbg:{[m;s] p:\".\" vs string s; x:`$last p; x:x^m x; `$(first p),\" \",(string x),\" Equity\"}[m] each sym, lcr:`${first x where x like \"LCR=*\"} each {raze \"^\" vs/: x} each \";\" vs/: string fixmsg from r}[.z.D]"
         },
         {
           "kind": "bloomberg",
