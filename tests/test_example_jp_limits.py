@@ -172,15 +172,16 @@ def test_the_info_alert_covers_every_market_and_every_activated_order():
     conns = {"OMS RT": Connection(name="OMS RT", kind="kdb", host="h", port=1),
              "bpipe": Connection(name="bpipe", kind="bloomberg", host="h", port=8194)}
     assert validate(info, conns, {}) == []
-    # the Bloomberg and compute steps are the JP alert's, reading from "orders"
-    one = _alert().model_dump(mode="json")["steps"][1:]
-    two = info.model_dump(mode="json")["steps"][1:]
+    assert "sidesign,otype,limit_price" in q                          # what the marketable test needs
+    # the Bloomberg steps and the join are the JP alert's, reading from "orders"
+    one = _alert().model_dump(mode="json")["steps"][1:4]
+    two = info.model_dump(mode="json")["steps"][1:4]
     assert json.dumps(two).replace("orders.", "jp_orders.").replace('"orders"', '"jp_orders"') == json.dumps(one)
 
 
 def test_the_info_alert_finds_limits_in_several_markets():
     LIMITS.update({"0700": (300.0, 400.0), "2330": (500.0, 600.0), "BHP": (40.0, 50.0)})
-    orders = pd.concat([ORDERS.assign(lcr=[None, "LCR=0.05", None]),
+    orders = pd.concat([ORDERS.assign(lcr=[None, "LCR=0.05", None], sidesign=[1, -1, 1], otype="market", limit_price=0.0),
                         ORDERS.iloc[[2]].assign(sym="0700.HK", bbg="0700 HK Equity", id_target=7),
                         ORDERS.iloc[[2]].assign(sym="2330.TW", bbg="2330 TT Equity", id_target=8)])
     out = run_steps(_info(), Res(orders), cache=StepCache(), day="d")
@@ -195,3 +196,30 @@ def test_all_the_limit_alerts_import_side_by_side(store, engine, huginn):
     a = store.alert_by_name("Active orders at limit up/down (all markets)")
     assert a and a.severity == "info" and not a.enabled
     assert {"JP LCR orders at limit up/down", "JP LCR orders at limit up/down (all orders)"} <= {x.name for x in store.alerts()}
+
+
+def test_the_info_alert_keeps_only_orders_marketable_at_the_limit():
+    """7203 is stuck at its limit up (3500), 9984 at its limit down (8000)."""
+    def o(i, sym, sidesign, otype, px):
+        code = sym.split(".")[0]
+        return {"sym": sym, "bbg": f"{code} JP Equity", "side": "buy" if sidesign > 0 else "sell",
+                "sidesign": sidesign, "otype": otype, "limit_price": px, "size": 100, "trader": "jdoe",
+                "algo": "VWAP", "lcr": None, "id_target": i}
+    orders = pd.DataFrame([
+        o(1, "7203.JP", 1, "limit", 3500.0),     # buy at the limit up: marketable
+        o(2, "7203.JP", 1, "limit", 3400.0),     # buy below it: not
+        o(3, "7203.JP", -1, "limit", 4000.0),    # sell above the ceiling: not
+        o(4, "7203.JP", -1, "limit", 3200.0),    # sell below it: marketable (unfavourable side still counts)
+        o(5, "9984.JP", -1, "limit", 8000.0),    # sell at the limit down: marketable
+        o(6, "9984.JP", -1, "limit", 8100.0),    # sell above it: not
+        o(7, "9984.JP", 1, "limit", 8500.0),     # buy above it: marketable
+        o(8, "9984.JP", 1, "market", 0.0),       # market order: marketable
+        o(9, "9984.JP", 1, "limit", None),       # no price on it: treated as market
+        o(10, "6758.JP", 1, "market", 0.0),      # marketable but the stock is not at a limit
+    ])
+    out = run_steps(_info(), Res(orders), cache=StepCache(), day="d")
+    assert [x.error for x in out] == [None] * 5
+    df = out[-1].df.sort_values("id_target")
+    assert list(df["id_target"]) == [1, 4, 5, 7, 8, 9]
+    assert list(df["limit_px"]) == [3500.0, 3500.0, 8000.0, 8000.0, 8000.0, 8000.0]
+    assert {"otype", "limit_price", "limit_px"} <= set(df.columns)
