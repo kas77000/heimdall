@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -145,6 +146,10 @@ class Muninn:
                 self._db.execute("PRAGMA journal_mode = WAL")
             self._db.executescript(SCHEMA)
             self._add_columns("alert_state", STATE_COLUMNS)
+            # This database's own tag, made once: run numbers start at 1 in every database,
+            # so pop-ups on a share several Heimdalls write to carry it to stay apart.
+            self._db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES ('instance', ?)",
+                             (json.dumps(uuid.uuid4().hex[:8]),))
 
     def _add_columns(self, table: str, columns: dict[str, str]) -> None:
         """Columns added after a database was first made (SQLite has no ADD IF NOT EXISTS)."""

@@ -38,12 +38,14 @@ which is Windows PowerShell so traders install nothing.
 * **Bifrost** is the Streamlit app. It talks only to Huginn's API and never
   opens the database, so it can run on any desk.
 * **Gjallarhorn** puts alerts on traders' screens. Huginn writes one JSON file
-  per notification to a shared folder (`alerts/<UTC day>/<run id>.json`,
+  per notification to a shared folder (`alerts/<UTC day>/<run id>-<instance>.json`,
   written to a temporary name and renamed); a Windows PowerShell + WPF app on
   each trader's PC polls it, shows one card at the bottom right (never a stack)
   and a list to go through, and writes acknowledgements back
-  (`acks/<run id>/<user>.json`), which Huginn reads every 10 seconds onto the
-  run. The share, not HTTP, joins them: trader PCs never talk to Huginn, so no
+  (`acks/<run id>-<instance>/<user>.json`), which Huginn reads every 10 seconds onto the
+  run. `<instance>` is a tag each database makes for itself once: several
+  Heimdalls (a PC, a server) can write to one share without their run numbers
+  colliding, and each records only its own acknowledgements. The share, not HTTP, joins them: trader PCs never talk to Huginn, so no
   proxy is in the way, and a share blip loses nothing on either side. The app
   is published from Bifrost into `<share>/app`; see *Gjallarhorn* below.
 

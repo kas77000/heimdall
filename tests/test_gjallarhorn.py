@@ -147,7 +147,7 @@ def test_a_firing_writes_a_pop_up_and_records_the_delivery(store, engine, share,
     run = store.run(engine.run_now(a.id))
     (f,) = (share / "alerts").rglob("*.json")
     data = json.loads(f.read_text(encoding="utf-8"))
-    assert data["id"] == str(run["id"]) and data["severity"] == "critical" and data["audience"] == ["Equities"]
+    assert data["id"] == f"{run['id']}-{store.get_setting('instance')}" and data["severity"] == "critical" and data["audience"] == ["Equities"]
     assert [(d["channel"], d["target"], d["ok"]) for d in run["deliveries"]] == [("gjallarhorn", "Equities", True)]
     assert sent["email"] == []                                         # no address: no mail
 
@@ -180,7 +180,7 @@ def test_a_recovery_pop_up_does_not_mail_unless_asked(store, engine, share, sent
 def test_acknowledgements_on_the_share_are_recorded_on_the_run(store, engine, share):
     a = _save(store)
     run_id = engine.run_now(a.id)
-    gjallarhorn.acknowledge(gjallarhorn.Settings(root=str(share)), str(run_id), "jdoe")
+    gjallarhorn.acknowledge(gjallarhorn.Settings(root=str(share)), f"{run_id}-{store.get_setting('instance')}", "jdoe")
     engine._gjallarhorn_acks(datetime.now(timezone.utc))
     run = store.run(run_id)
     assert run["acknowledged_by"] == "jdoe (Gjallarhorn)" and run["acknowledged_at"]
@@ -194,7 +194,7 @@ def test_acknowledging_in_bifrost_closes_the_pop_ups(store, engine, share, hugin
     a = _save(store)
     run_id = engine.run_now(a.id)
     huginn.post("/runs/acknowledge", {"run_ids": [run_id]})
-    ack = share / "acks" / str(run_id)
+    ack = share / "acks" / f"{run_id}-{store.get_setting('instance')}"
     (f,) = ack.glob("*.json")
     assert json.loads(f.read_text(encoding="utf-8"))["note"] == "acknowledged in Bifrost"
 

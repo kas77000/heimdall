@@ -471,7 +471,8 @@ def create_app(store: Muninn, engine: Engine, cfg: Config, lifespan=None) -> Fas
         for rid in run_ids:
             try:
                 if any(d["channel"] == "gjallarhorn" and d["ok"] for d in store.run(rid)["deliveries"]):
-                    gjallarhorn.acknowledge(g, str(rid), who or "bifrost", note="acknowledged in Bifrost")
+                    gjallarhorn.acknowledge(g, gjallarhorn.pop_up_id(g, rid), who or "bifrost",
+                                            note="acknowledged in Bifrost")
             except (NotFound, OSError):
                 continue
 

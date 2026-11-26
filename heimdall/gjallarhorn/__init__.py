@@ -5,8 +5,8 @@ trader's PC (Windows PowerShell and WPF, nothing to install, see ``app/``)
 reads the folder, shows the pop-ups and writes acknowledgements back, which
 Huginn records on the run.
 
-    <root>/alerts/<YYYY-MM-DD>/<run id>.json    one per notification (UTC day)
-    <root>/acks/<run id>/<user>.json            one per acknowledgement
+    <root>/alerts/<YYYY-MM-DD>/<id>.json        one per notification (UTC day)
+    <root>/acks/<id>/<user>.json                one per acknowledgement
     <root>/app/                                 the trader app, published from Bifrost
     <root>/sounds/<name>.wav                    sounds uploaded from Bifrost
     <root>/users/<user>.json                    each trader running Gjallarhorn, refreshed while it runs
@@ -17,6 +17,11 @@ its Windows user name.
 
 Every file is written to a temporary name and renamed, so a reader never sees
 half of one.
+
+Several Heimdalls can write to one share (a colleague's PC, a server, yours, at
+the same time or not): a pop-up's id is ``<run id>-<instance>``, the instance
+being the tag each database makes for itself, so run 4 of one Heimdall is never
+taken for run 4 of another, and each records only its own acknowledgements.
 """
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -69,6 +75,7 @@ class Settings:
     ttl_hours: int = TTL_HOURS                # a pop-up leaves every list this long after it fired
     sounds: Optional[dict] = None             # severity -> sound; Gjallarhorn's horns by default
     groups: Optional[dict] = None             # group name -> Windows user names
+    instance: str = ""                        # this Heimdall's tag (its database's), in every pop-up id
 
     def expires(self, at: datetime) -> str:
         return (at.astimezone(timezone.utc) + timedelta(hours=self.ttl_hours)).isoformat(timespec="seconds")
@@ -89,7 +96,22 @@ class Settings:
         g = settings.get("gjallarhorn") or {}
         return cls(root=str(g.get("root", "") or "").strip(), ttl_hours=_ttl(g),
                    sounds={k: v for k, v in (g.get("sounds") or {}).items() if k in SEVERITIES},
-                   groups=clean_groups(g.get("groups")))
+                   groups=clean_groups(g.get("groups")),
+                   instance=_SAFE.sub("", str(settings.get("instance") or "")))
+
+
+def pop_up_id(settings: Optional[Settings], run_id: int) -> str:
+    """The id of a run's pop-up on the share: the run number and this Heimdall's tag."""
+    tag = settings.instance if settings else ""
+    return f"{run_id}-{tag}" if tag else str(run_id)
+
+
+def run_of(settings: Settings, pop_up: str) -> Optional[int]:
+    """The run number a pop-up id stands for, when this Heimdall wrote it; None otherwise."""
+    run, _, tag = pop_up.partition("-")
+    if not run.isdigit() or tag != settings.instance:
+        return None
+    return int(run)
 
 
 # -- groups of traders -----------------------------------------------------------------
@@ -208,8 +230,10 @@ def payload(alert, ev, kind: str, run_id: int, at: datetime, settings: Optional[
     n = ev.row_count
     return {
         "schema": SCHEMA,
-        "id": str(run_id),
+        "id": pop_up_id(settings, run_id),
         "run_id": run_id,
+        "instance": settings.instance if settings else "",
+        "host": socket.gethostname(),                # which Heimdall wrote it, for whoever looks at the share
         "alert_id": alert.id,
         "alert": alert.name,
         "group": alert.group,
@@ -286,14 +310,16 @@ class Ack:
 
 
 def acks(settings: Settings, since: Optional[datetime] = None) -> list[Ack]:
-    """Acknowledgements of runs (not tests), the first per run, newer than ``since``."""
+    """Acknowledgements of this Heimdall's runs (not tests, not another Heimdall's), the
+    first per run, newer than ``since``."""
     base = Path(settings.root) / "acks"
     if not settings.configured or not base.is_dir():
         return []
     cutoff = since.timestamp() if since else 0
     out = []
     for d in base.iterdir():
-        if not d.is_dir() or not d.name.isdigit():
+        run_id = run_of(settings, d.name)            # another Heimdall's, or a test: not ours to record
+        if run_id is None or not d.is_dir():
             continue
         try:
             if d.stat().st_mtime < cutoff:
@@ -304,7 +330,7 @@ def acks(settings: Settings, since: Optional[datetime] = None) -> list[Ack]:
                     a = json.loads(f.read_text(encoding="utf-8-sig"))
                 except (OSError, ValueError):
                     continue
-                out.append(Ack(int(d.name), str(a.get("user") or f.stem), str(a.get("at") or "")))
+                out.append(Ack(run_id, str(a.get("user") or f.stem), str(a.get("at") or "")))
                 break
         except OSError:
             continue

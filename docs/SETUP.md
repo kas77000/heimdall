@@ -394,11 +394,15 @@ writes acknowledgements back.
 
 ```
 \\fileserver\share\Heimdall\Gjallarhorn\
-  alerts\<YYYY-MM-DD>\<run id>.json   one per firing, written by Huginn
-  acks\<run id>\<user>.json           one per acknowledgement, written by the traders' app
+  alerts\<YYYY-MM-DD>\<id>.json       one per firing, written by Huginn
+  acks\<id>\<user>.json               one per acknowledgement, written by the traders' app
   app\                                the trader app (and its horn sounds), published from Bifrost
   sounds\<name>.wav                   sounds uploaded from Bifrost
 ```
+
+`<id>` is the run number and the tag of the Heimdall that wrote it (`4-9f064f84`):
+any number of Heimdalls, on PCs or a server, can use the same shared folder, and
+every trader gets the pop-ups of all of them.
 
 **Set it up once**, in Bifrost, Settings → Gjallarhorn:
 
